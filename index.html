@@ -1,0 +1,761 @@
+<title>Tiny Tectonics</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: full-height split — planet viewport flexes, control panel docks right (bottom on phones). Single dark look by design. */
+:root {
+  --space: #07090d;
+  --space-glow: #111a26;
+  --panel: #0f131a;
+  --panel-edge: #232a36;
+  --ink: #e6e9ee;
+  --ink-dim: #8d97a6;
+  --accent: #e8a35c;      /* magma orange */
+  --accent-ink: #1a1006;
+  --track: #2a3240;
+  --font-ui: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  --font-data: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  color-scheme: dark;
+}
+[hidden] { display: none !important; }
+html { height: 100%; box-sizing: border-box; background: var(--space); }
+*, *::before, *::after { box-sizing: inherit; }
+body { height: 100%; margin: 0; overflow: hidden; background: var(--space); color: var(--ink); font: 14px/1.45 var(--font-ui); }
+#app { display: flex; height: 100%; }
+#view { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0;
+  background: radial-gradient(ellipse at center, var(--space-glow) 0%, var(--space) 70%); }
+#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+#gl:active { cursor: grabbing; }
+#toggle { position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: calc(12px + env(safe-area-inset-right, 0px));
+  font: 500 13px var(--font-ui); color: var(--ink); background: rgba(15,19,26,.82); border: 1px solid var(--panel-edge);
+  border-radius: 6px; padding: 6px 10px; cursor: pointer; backdrop-filter: blur(6px); }
+#hud { position: absolute; left: calc(14px + env(safe-area-inset-left, 0px)); bottom: 12px; font: 12px var(--font-data);
+  color: var(--ink-dim); pointer-events: none; font-variant-numeric: tabular-nums; }
+#hud b { color: var(--ink); font-weight: 500; font-size: 15px; }
+#panel { flex: 0 0 312px; overflow-y: auto; background: var(--panel); border-left: 1px solid var(--panel-edge);
+  padding: 18px 18px 24px; padding-right: max(18px, env(safe-area-inset-right, 0px)); display: flex; flex-direction: column; gap: 18px; }
+@media (max-width: 720px) {
+  #app { flex-direction: column; }
+  #panel { flex: 0 0 auto; max-height: 46%; border-left: 0; border-top: 1px solid var(--panel-edge);
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+}
+h1 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -.01em; }
+.clock { font: 500 26px var(--font-data); font-variant-numeric: tabular-nums; margin-top: 2px; }
+.clock small { font-size: 13px; color: var(--ink-dim); margin-left: 4px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+button.btn { flex: 1 1 0; font: 500 13px var(--font-ui); padding: 8px 10px; border-radius: 6px; cursor: pointer;
+  color: var(--ink); background: #1a212c; border: 1px solid var(--panel-edge); }
+button.btn:hover { background: #222b38; }
+button.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.btn.pending { box-shadow: 0 0 0 2px var(--accent); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+section { display: flex; flex-direction: column; gap: 12px; }
+.eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--ink-dim); font-weight: 600; }
+.ctl { display: flex; flex-direction: column; gap: 4px; }
+.ctl label { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+.ctl output { font: 12px var(--font-data); color: var(--ink-dim); font-variant-numeric: tabular-nums; text-align: right; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.seed { display: flex; gap: 8px; align-items: center; }
+.seed input { flex: 1; min-width: 0; font: 13px var(--font-data); color: var(--ink); background: #0a0d12; border: 1px solid var(--panel-edge); border-radius: 6px; padding: 6px 8px; }
+.seed button { flex: 0 0 auto; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.seg button { font: 500 12px var(--font-ui); padding: 7px 6px; border-radius: 6px; cursor: pointer; color: var(--ink-dim);
+  background: transparent; border: 1px solid var(--panel-edge); }
+.seg button[aria-pressed=true] { color: var(--ink); background: #1f2834; border-color: #3a4556; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.check input { accent-color: var(--accent); }
+.legend { display: flex; flex-direction: column; gap: 4px; }
+.legend .bar { height: 10px; border-radius: 3px; }
+.legend .ticks { display: flex; justify-content: space-between; font: 11px var(--font-data); color: var(--ink-dim); }
+dl.stats { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; font-size: 12.5px; }
+dl.stats dt { color: var(--ink-dim); }
+dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-variant-numeric: tabular-nums; }
+.note { font-size: 12px; color: var(--ink-dim); line-height: 1.5; }
+.hint { font-size: 11.5px; color: var(--ink-dim); }
+#err { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--ink-dim); }
+</style>
+
+<div id="app">
+  <div id="view">
+    <canvas id="gl" aria-label="Planet view. Drag to orbit, scroll or pinch to zoom."></canvas>
+    <div id="err" hidden></div>
+    <div id="hud"><b id="hudTime">0.0</b> Myr</div>
+    <button id="toggle" type="button" aria-controls="panel" aria-expanded="true">Hide controls</button>
+  </div>
+
+  <aside id="panel">
+    <div>
+      <h1>Tiny Tectonics</h1>
+      <div class="clock"><span id="clock">0.0</span><small>Myr elapsed</small></div>
+    </div>
+
+    <div class="row">
+      <button class="btn primary" id="play" type="button">Pause</button>
+      <button class="btn" id="stepBtn" type="button">Step</button>
+      <button class="btn" id="reset" type="button">Reset</button>
+    </div>
+
+    <section>
+      <div class="eyebrow">Run</div>
+      <div class="ctl">
+        <label for="dt">Time step <output id="dtOut"></output></label>
+        <input type="range" id="dt" min="0.25" max="20" step="0.25" value="2">
+      </div>
+    </section>
+
+    <section>
+      <div class="eyebrow">World · applies on reset</div>
+      <div class="ctl">
+        <label for="res">Lattice resolution <output id="resOut"></output></label>
+        <input type="range" id="res" min="12" max="160" step="4" value="64">
+      </div>
+      <div class="ctl">
+        <label for="cont">Continental area <output id="contOut"></output></label>
+        <input type="range" id="cont" min="0.05" max="0.7" step="0.01" value="0.3">
+      </div>
+      <div class="ctl">
+        <label for="plates">Plates <output id="platesOut"></output></label>
+        <input type="range" id="plates" min="3" max="24" step="1" value="12">
+      </div>
+      <div class="ctl">
+        <label for="radius">Planet radius <output id="radiusOut"></output></label>
+        <input type="range" id="radius" min="2000" max="10000" step="1" value="6371">
+      </div>
+      <div class="ctl">
+        <label for="seed">Seed</label>
+        <div class="seed">
+          <input id="seed" type="number" value="1" step="1">
+          <button class="btn" id="reseed" type="button">New seed</button>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="eyebrow">View</div>
+      <div class="seg" id="views">
+        <button type="button" data-view="elev" aria-pressed="true">Elevation</button>
+        <button type="button" data-view="plates" aria-pressed="false">Plates</button>
+        <button type="button" data-view="age" aria-pressed="false">Seafloor age</button>
+        <button type="button" data-view="thick" aria-pressed="false">Crust thickness</button>
+      </div>
+      <label class="check"><input type="checkbox" id="bounds"> Outline plate boundaries</label>
+      <div class="legend" id="legend"><div class="bar" id="legendBar"></div><div class="ticks" id="legendTicks"></div></div>
+    </section>
+
+    <section>
+      <div class="eyebrow">State</div>
+      <dl class="stats">
+        <dt>Cells</dt><dd id="sCells">–</dd>
+        <dt>Mean spacing</dt><dd id="sSpacing">–</dd>
+        <dt>Plates with crust</dt><dd id="sPlates">–</dd>
+        <dt>Continental crust</dt><dd id="sCont">–</dd>
+        <dt>Land above sea level</dt><dd id="sLand">–</dd>
+        <dt>Substeps per step</dt><dd id="sSub">–</dd>
+        <dt>Compute per step</dt><dd id="sMs">–</dd>
+      </dl>
+    </section>
+
+    <p class="note">Phase&nbsp;0 scaffold. Plates are rigid caps turning about fixed Euler poles. Overlaps are resolved by buoyancy and gaps fill with new seafloor. These are placeholder rules until the full algorithm lands.</p>
+    <p class="hint">Drag to orbit · scroll or pinch to zoom · <kbd>Space</kbd> pause · <kbd>H</kbd> hide panel</p>
+  </aside>
+</div>
+
+<script>
+'use strict';
+/* ============================================================================
+   Tiny Tectonics — phase 0
+   Geodesic grid (icosahedron, frequency f: N = 10 f^2 + 2 cells, 12 pentagons),
+   rigid plates stored as body-frame rasters on the same lattice, WebGL2 render.
+   ========================================================================== */
+
+// ---------- small math ----------
+function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function gauss(rng) { return Math.sqrt(-2 * Math.log(1 - rng())) * Math.cos(2 * Math.PI * rng()); }
+// Smooth band-limited noise on the sphere: sum of random plane waves, ~unit variance.
+function makeNoise(rng, waves = 32, kmin = 1.5, kmax = 14) {
+  const W = new Float64Array(waves * 5); let norm = 0;
+  for (let n = 0; n < waves; n++) {
+    const z = 2 * rng() - 1, ph = 2 * Math.PI * rng(), r = Math.sqrt(1 - z * z);
+    const k = kmin * Math.pow(kmax / kmin, n / (waves - 1)), amp = 1 / k;
+    W.set([r * Math.cos(ph) * k, r * Math.sin(ph) * k, z * k, 2 * Math.PI * rng(), amp], 5 * n);
+    norm += amp * amp / 2;
+  }
+  norm = 1 / Math.sqrt(norm);
+  return (x, y, z) => { let s = 0; for (let n = 0; n < waves * 5; n += 5) s += W[n + 4] * Math.sin(W[n] * x + W[n + 1] * y + W[n + 2] * z + W[n + 3]); return s * norm; };
+}
+function qmul(a, b) { // (x,y,z,w)
+  return [a[3]*b[0] + a[0]*b[3] + a[1]*b[2] - a[2]*b[1],
+          a[3]*b[1] - a[0]*b[2] + a[1]*b[3] + a[2]*b[0],
+          a[3]*b[2] + a[0]*b[1] - a[1]*b[0] + a[2]*b[3],
+          a[3]*b[3] - a[0]*b[0] - a[1]*b[1] - a[2]*b[2]];
+}
+function qaxis(ax, ang) { const s = Math.sin(ang / 2); return [ax[0]*s, ax[1]*s, ax[2]*s, Math.cos(ang / 2)]; }
+function qnorm(q) { const l = Math.hypot(q[0], q[1], q[2], q[3]); return [q[0]/l, q[1]/l, q[2]/l, q[3]/l]; }
+function qmat(q, out, o = 0) { // row-major 3x3 rotation
+  const [x, y, z, w] = q;
+  out[o] = 1 - 2*(y*y + z*z); out[o+1] = 2*(x*y - z*w);     out[o+2] = 2*(x*z + y*w);
+  out[o+3] = 2*(x*y + z*w);   out[o+4] = 1 - 2*(x*x + z*z); out[o+5] = 2*(y*z - x*w);
+  out[o+6] = 2*(x*z - y*w);   out[o+7] = 2*(y*z + x*w);     out[o+8] = 1 - 2*(x*x + y*y);
+  return out;
+}
+
+// ---------- geodesic grid ----------
+// Vertices are flat points on each icosahedron face, pushed out to the sphere.
+// Because the flat lattice is the gnomonic image of the cells, point location is O(1):
+// pick the face, project onto its plane, read off lattice coordinates.
+const gridCache = new Map();
+function buildGrid(f) {
+  if (gridCache.has(f)) return gridCache.get(f);
+  const t = (1 + Math.sqrt(5)) / 2;
+  const V0 = [[-1,t,0],[1,t,0],[-1,-t,0],[1,-t,0],[0,-1,t],[0,1,t],[0,-1,-t],[0,1,-t],[t,0,-1],[t,0,1],[-t,0,-1],[-t,0,1]]
+    .map(v => { const l = Math.hypot(...v); return v.map(c => c / l); });
+  let F = [[0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],[1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],
+           [3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],[4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]];
+  F = F.map(([a, b, c]) => { // force outward counter-clockwise winding
+    const A = V0[a], B = V0[b], C = V0[c];
+    const e1 = [B[0]-A[0], B[1]-A[1], B[2]-A[2]], e2 = [C[0]-A[0], C[1]-A[1], C[2]-A[2]];
+    const n = [e1[1]*e2[2]-e1[2]*e2[1], e1[2]*e2[0]-e1[0]*e2[2], e1[0]*e2[1]-e1[1]*e2[0]];
+    return (n[0]*A[0] + n[1]*A[1] + n[2]*A[2]) > 0 ? [a, b, c] : [a, c, b];
+  });
+
+  const N = 10 * f * f + 2;
+  const pos = new Float64Array(N * 3);
+  let nv = 0;
+  const addV = (x, y, z) => { const l = Math.hypot(x, y, z); pos[3*nv] = x/l; pos[3*nv+1] = y/l; pos[3*nv+2] = z/l; return nv++; };
+  for (const v of V0) addV(...v);
+  const lerp = (a, b, s) => [a[0] + (b[0]-a[0])*s, a[1] + (b[1]-a[1])*s, a[2] + (b[2]-a[2])*s];
+  const edgeBase = new Map();
+  const edgePoint = (a, b, k) => {
+    const lo = Math.min(a, b), hi = Math.max(a, b), key = lo * 12 + hi;
+    let base = edgeBase.get(key);
+    if (base === undefined) { base = nv; for (let m = 1; m < f; m++) addV(...lerp(V0[lo], V0[hi], m / f)); edgeBase.set(key, base); }
+    return base + (a === lo ? k : f - k) - 1;
+  };
+  const T = (f + 1) * (f + 2) / 2;
+  const rs = i => i * (f + 1) - ((i * (i - 1)) >> 1);
+  const ftab = new Int32Array(20 * T);
+  for (let fi = 0; fi < 20; fi++) {
+    const [a, b, c] = F[fi], A = V0[a], B = V0[b], C = V0[c];
+    for (let i = 0; i <= f; i++) for (let j = 0; i + j <= f; j++) {
+      let id;
+      if (i === 0 && j === 0) id = a; else if (i === f) id = b; else if (j === f) id = c;
+      else if (j === 0) id = edgePoint(a, b, i);
+      else if (i === 0) id = edgePoint(a, c, j);
+      else if (i + j === f) id = edgePoint(b, c, j);
+      else { const s = i / f, u = j / f; id = addV(A[0] + (B[0]-A[0])*s + (C[0]-A[0])*u, A[1] + (B[1]-A[1])*s + (C[1]-A[1])*u, A[2] + (B[2]-A[2])*s + (C[2]-A[2])*u); }
+      ftab[fi * T + rs(i) + j] = id;
+    }
+  }
+  if (nv !== N) throw new Error('grid vertex count mismatch');
+
+  // triangles of the geodesic triangulation (dual of the hex/pent cells)
+  const NT = 20 * f * f, tris = new Int32Array(NT * 3); let nt = 0;
+  for (let fi = 0; fi < 20; fi++) for (let i = 0; i < f; i++) for (let j = 0; i + j < f; j++) {
+    const L = (ii, jj) => ftab[fi * T + rs(ii) + jj];
+    tris[nt++] = L(i, j); tris[nt++] = L(i + 1, j); tris[nt++] = L(i, j + 1);
+    if (i + j + 2 <= f) { tris[nt++] = L(i + 1, j); tris[nt++] = L(i + 1, j + 1); tris[nt++] = L(i, j + 1); }
+  }
+  // each vertex: neighbours and incident triangles, in counter-clockwise order
+  const deg = new Int32Array(N);
+  for (let k = 0; k < NT * 3; k++) deg[tris[k]]++;
+  const off = new Int32Array(N + 1);
+  for (let v = 0; v < N; v++) off[v + 1] = off[v] + deg[v];
+  const pn1 = new Int32Array(off[N]), pn2 = new Int32Array(off[N]), pt = new Int32Array(off[N]), fill = new Int32Array(N);
+  for (let tt = 0; tt < NT; tt++) {
+    const a = tris[3*tt], b = tris[3*tt+1], c = tris[3*tt+2];
+    let k = off[a] + fill[a]++; pn1[k] = b; pn2[k] = c; pt[k] = tt;
+    k = off[b] + fill[b]++; pn1[k] = c; pn2[k] = a; pt[k] = tt;
+    k = off[c] + fill[c]++; pn1[k] = a; pn2[k] = b; pt[k] = tt;
+  }
+  const nbr = new Int32Array(off[N]), ring = new Int32Array(off[N]);
+  for (let v = 0; v < N; v++) {
+    const o = off[v], d = deg[v];
+    let cur = 0;
+    for (let s = 0; s < d; s++) {
+      nbr[o + s] = pn1[o + cur]; ring[o + s] = pt[o + cur];
+      const want = pn2[o + cur];
+      for (let k = 0; k < d; k++) if (pn1[o + k] === want) { cur = k; break; }
+    }
+  }
+  // per-face data for point location
+  const FN = new Float64Array(60), FD = new Float64Array(20), FA = new Float64Array(60), G1 = new Float64Array(60), G2 = new Float64Array(60);
+  for (let fi = 0; fi < 20; fi++) {
+    const [A, B, C] = F[fi].map(k => V0[k]);
+    const e1 = [B[0]-A[0], B[1]-A[1], B[2]-A[2]], e2 = [C[0]-A[0], C[1]-A[1], C[2]-A[2]];
+    const n = [A[0]+B[0]+C[0], A[1]+B[1]+C[1], A[2]+B[2]+C[2]], nl = Math.hypot(...n);
+    const d11 = e1[0]*e1[0]+e1[1]*e1[1]+e1[2]*e1[2], d22 = e2[0]*e2[0]+e2[1]*e2[1]+e2[2]*e2[2], d12 = e1[0]*e2[0]+e1[1]*e2[1]+e1[2]*e2[2];
+    const det = d11 * d22 - d12 * d12;
+    for (let c = 0; c < 3; c++) {
+      FN[3*fi+c] = n[c] / nl; FA[3*fi+c] = A[c];
+      G1[3*fi+c] = (e1[c] * d22 - e2[c] * d12) / det;
+      G2[3*fi+c] = (e2[c] * d11 - e1[c] * d12) / det;
+    }
+    FD[fi] = FN[3*fi]*A[0] + FN[3*fi+1]*A[1] + FN[3*fi+2]*A[2];
+  }
+  const fp1 = f + 1;
+  function locate(x, y, z) {
+    let best = -2, fi = 0;
+    for (let k = 0; k < 60; k += 3) { const d = FN[k]*x + FN[k+1]*y + FN[k+2]*z; if (d > best) { best = d; fi = k; } }
+    const s = FD[fi / 3] / best;
+    const px = x*s - FA[fi], py = y*s - FA[fi+1], pz = z*s - FA[fi+2];
+    const a = (px*G1[fi] + py*G1[fi+1] + pz*G1[fi+2]) * f, b = (px*G2[fi] + py*G2[fi+1] + pz*G2[fi+2]) * f;
+    let i = Math.floor(a), j = Math.floor(b);
+    const fa = a - i, fb = b - j;
+    if (fa + fb < 1) { const w0 = 1 - fa - fb; if (fa > w0 && fa >= fb) i++; else if (fb > w0) j++; }
+    else { const w11 = fa + fb - 1, w10 = 1 - fb, w01 = 1 - fa; if (w11 >= w10 && w11 >= w01) { i++; j++; } else if (w10 >= w01) i++; else j++; }
+    if (i < 0) i = 0; if (j < 0) j = 0; if (i > f) i = f; if (i + j > f) j = f - i;
+    return ftab[(fi / 3) * T + i * fp1 - ((i * (i - 1)) >> 1) + j];
+  }
+  // mean neighbour spacing on the unit sphere
+  let sum = 0;
+  for (let v = 0; v < N; v++) for (let k = off[v]; k < off[v + 1]; k++) { const u = nbr[k]; sum += Math.acos(Math.min(1, pos[3*v]*pos[3*u] + pos[3*v+1]*pos[3*u+1] + pos[3*v+2]*pos[3*u+2])); }
+  const spacing = sum / off[N];
+  const grid = { f, N, pos, off, nbr, ring, tris, NT, locate, spacing };
+  gridCache.set(f, grid);
+  return grid;
+}
+
+// ---------- simulation (placeholder physics) ----------
+const T_OCEAN = 7;     // km, fresh oceanic crust
+const T_CONT = 20;     // km, threshold above which crust counts as continental
+const F_ARC = 0.1;     // fraction of subducted oceanic crust volume returned to the overriding cell
+const KAPPA = 3000;    // km^2/Myr, lateral relaxation of thick continental crust
+
+function smoothstep(a, b, x) { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
+// Elevation (km relative to sea level): half-space cooling for seafloor, Airy isostasy for continents.
+function elevation(T, age) {
+  const ho = -2.6 - 0.33 * Math.sqrt(Math.min(Math.max(age, 0), 160));
+  const hc = 0.5 + 0.15 * (T - 35);
+  const w = smoothstep(8, 28, T);
+  return ho * (1 - w) + hc * w;
+}
+
+function createSim(grid, prm) {
+  const { N, pos, off, nbr, locate } = grid;
+  const P = prm.plates, R = prm.radius;
+  const rng = mulberry32(prm.seed >>> 0 || 1);
+  const noiseA = makeNoise(rng), noiseB = makeNoise(rng), noiseC = makeNoise(rng, 24, 1, 6);
+
+  // noisy multi-source Dijkstra growth on the cell graph
+  function grow(seeds, rates, label, limit) {
+    const cap = off[N] + seeds.length + 8;
+    const hc = new Float64Array(cap), hv = new Int32Array(cap), hl = new Int32Array(cap); let hn = 0;
+    const push = (c, v, l) => { let k = hn++; while (k > 0) { const p = (k - 1) >> 1; if (hc[p] <= c) break; hc[k] = hc[p]; hv[k] = hv[p]; hl[k] = hl[p]; k = p; } hc[k] = c; hv[k] = v; hl[k] = l; };
+    const pop = () => { const c = hc[0], v = hv[0], l = hl[0]; hn--; const lc = hc[hn], lv = hv[hn], ll = hl[hn]; let k = 0;
+      for (;;) { let m = 2 * k + 1; if (m >= hn) break; if (m + 1 < hn && hc[m + 1] < hc[m]) m++; if (hc[m] >= lc) break; hc[k] = hc[m]; hv[k] = hv[m]; hl[k] = hl[m]; k = m; }
+      hc[k] = lc; hv[k] = lv; hl[k] = ll; return [c, v, l]; };
+    seeds.forEach((s, k) => push(0, s, k));
+    let count = 0;
+    while (hn > 0 && count < limit) {
+      const [c, v, l] = pop();
+      if (label[v] >= 0) continue;
+      label[v] = l; count++;
+      for (let k = off[v]; k < off[v + 1]; k++) {
+        const u = nbr[k]; if (label[u] >= 0) continue;
+        const w = Math.exp(0.8 * noiseA(pos[3*u], pos[3*u+1], pos[3*u+2])) * (0.5 + rng()) / rates[l];
+        push(c + w, u, l);
+      }
+    }
+  }
+  const pick = n => { const s = new Set(); while (s.size < n) s.add(Math.floor(rng() * N)); return [...s]; };
+
+  const owner = new Int16Array(N).fill(-1);
+  grow(pick(P), Array.from({ length: P }, () => Math.exp(0.45 * gauss(rng))), owner, N);
+  const contLabel = new Int16Array(N).fill(-1);
+  const K = 2 + Math.floor(rng() * 5);
+  grow(pick(K), Array.from({ length: K }, () => Math.exp(0.35 * gauss(rng))), contLabel, Math.round(prm.contFrac * N));
+
+  // plate layers: thickness T (0 = no crust) and birth time, indexed p*N + bodyCell
+  const layerT = new Float32Array(P * N), layerB = new Float32Array(P * N);
+  const ref = new Int32Array(N);
+  const contCount = new Float64Array(P), area = new Float64Array(P);
+  for (let i = 0; i < N; i++) {
+    const p = owner[i], x = pos[3*i], y = pos[3*i+1], z = pos[3*i+2];
+    const cont = contLabel[i] >= 0;
+    layerT[p * N + i] = cont ? 35 + 4 * noiseB(x, y, z) : T_OCEAN;
+    layerB[p * N + i] = -Math.max(5, 70 + 35 * noiseC(x, y, z));
+    ref[i] = i; area[p]++; if (cont) contCount[p]++;
+  }
+  // kinematics: random Euler poles; continent-laden plates move slower
+  const axis = [], omega = new Float64Array(P), quat = [];
+  for (let p = 0; p < P; p++) {
+    const z = 2 * rng() - 1, ph = 2 * Math.PI * rng(), r = Math.sqrt(1 - z * z);
+    axis.push([r * Math.cos(ph), r * Math.sin(ph), z]);
+    const cmPerYr = (2 + 7 * rng()) / (1 + 2 * contCount[p] / Math.max(1, area[p]));
+    omega[p] = cmPerYr * 10 / R; // 1 cm/yr = 10 km/Myr
+    quat.push([0, 0, 0, 1]);
+  }
+  const M = new Float64Array(P * 9);
+  const newOwner = new Int16Array(N), newRef = new Int32Array(N);
+  const Tw = new Float32Array(N), Tn = new Float32Array(N);
+  const cand = new Int32Array(8), candR = new Int32Array(8), hitP = new Int32Array(8), hitR = new Int32Array(8);
+  const sim = { grid, prm, N, P, time: 0, owner, ref, layerT, layerB, omega, axis, quat, lastSub: 0 };
+
+  function substep(h) {
+    const time = sim.time + h;
+    for (let p = 0; p < P; p++) {
+      quat[p] = qnorm(qmul(qaxis(axis[p], omega[p] * h), quat[p]));
+      qmat(quat[p], M, 9 * p); // body -> world; we apply its transpose
+    }
+    const own = sim.owner, rf = sim.ref;
+    for (let i = 0; i < N; i++) {
+      const x = pos[3*i], y = pos[3*i+1], z = pos[3*i+2];
+      let nc = 0; cand[nc++] = own[i];
+      for (let k = off[i]; k < off[i + 1]; k++) {
+        const o = own[nbr[k]]; let seen = false;
+        for (let c = 0; c < nc; c++) if (cand[c] === o) { seen = true; break; }
+        if (!seen) cand[nc++] = o;
+      }
+      let hits = 0;
+      for (let c = 0; c < nc; c++) {
+        const p = cand[c], m = 9 * p;
+        const r = locate(M[m]*x + M[m+3]*y + M[m+6]*z, M[m+1]*x + M[m+4]*y + M[m+7]*z, M[m+2]*x + M[m+5]*y + M[m+8]*z);
+        candR[c] = r;
+        if (layerT[p * N + r] > 0) { hitP[hits] = p; hitR[hits] = r; hits++; }
+      }
+      if (hits === 1) { newOwner[i] = hitP[0]; newRef[i] = hitR[0]; continue; }
+      if (hits === 0) {
+        // gap: either a lattice-aliasing pinhole inside the old plate (heal it) or a divergent margin (new seafloor)
+        const p = cand[0], r = candR[0], base = p * N; let filled = 0, src = -1;
+        for (let k = off[r]; k < off[r + 1]; k++) if (layerT[base + nbr[k]] > 0) { filled++; src = nbr[k]; }
+        if (filled >= 4) { layerT[base + r] = layerT[base + src]; layerB[base + r] = layerB[base + src]; }
+        else { layerT[base + r] = T_OCEAN; layerB[base + r] = time; }
+        newOwner[i] = p; newRef[i] = r; continue;
+      }
+      // overlap: the most buoyant (highest-standing) crust stays on top
+      let win = 0, best = -Infinity;
+      for (let k = 0; k < hits; k++) {
+        const idx = hitP[k] * N + hitR[k];
+        const e = elevation(layerT[idx], time - layerB[idx]);
+        if (e > best) { best = e; win = k; }
+      }
+      const wIdx = hitP[win] * N + hitR[win];
+      for (let k = 0; k < hits; k++) {
+        if (k === win) continue;
+        const lIdx = hitP[k] * N + hitR[k], TL = layerT[lIdx];
+        layerT[wIdx] += TL > T_CONT ? TL : F_ARC * TL; // continents stack; oceanic slabs feed arcs
+        layerT[lIdx] = 0;
+      }
+      newOwner[i] = hitP[win]; newRef[i] = hitR[win];
+    }
+    sim.owner.set(newOwner); sim.ref.set(newRef);
+
+    // relax thick continental crust laterally (volume-conserving diffusion among continental cells)
+    const sKm = grid.spacing * R, c = Math.min(KAPPA * h / (sKm * sKm), 0.16);
+    for (let i = 0; i < N; i++) Tw[i] = layerT[own[i] * N + rf[i]];
+    for (let i = 0; i < N; i++) {
+      const Ti = Tw[i]; Tn[i] = Ti; if (Ti <= T_CONT) continue;
+      let acc = 0;
+      for (let k = off[i]; k < off[i + 1]; k++) { const Tj = Tw[nbr[k]]; if (Tj > T_CONT) acc += Tj - Ti; }
+      Tn[i] = Ti + c * acc;
+    }
+    for (let i = 0; i < N; i++) if (Tw[i] > T_CONT) layerT[own[i] * N + rf[i]] = Tn[i];
+    sim.time = time;
+  }
+
+  sim.step = function (dt) {
+    let wmax = 0; for (let p = 0; p < P; p++) wmax = Math.max(wmax, omega[p]);
+    const sub = Math.max(1, Math.ceil(wmax * dt / (0.6 * grid.spacing))); // keep motion under ~0.6 cell per substep
+    for (let s = 0; s < sub; s++) substep(dt / sub);
+    sim.lastSub = sub;
+    return sub;
+  };
+  // per-cell world-frame fields for display
+  sim.fields = function (T, age, h) {
+    for (let i = 0; i < N; i++) {
+      const idx = sim.owner[i] * N + sim.ref[i];
+      T[i] = layerT[idx]; age[i] = sim.time - layerB[idx]; h[i] = elevation(T[i], age[i]);
+    }
+  };
+  return sim;
+}
+
+// ---------- colour maps ----------
+const hex = s => [parseInt(s.slice(1, 3), 16), parseInt(s.slice(3, 5), 16), parseInt(s.slice(5, 7), 16)];
+const ramp = stops => stops.map(([v, c]) => [v, hex(c)]);
+const CM = {
+  ocean: ramp([[-7, '#08142e'], [-5, '#0f2d5c'], [-3.2, '#1a5a93'], [-1.5, '#3b8fbf'], [-0.3, '#6fc0d4'], [0, '#93d6d8']]),
+  land:  ramp([[0, '#3f7a3a'], [0.4, '#6b9748'], [1.2, '#a8a463'], [2.4, '#9b7448'], [3.8, '#7b5a45'], [5.5, '#efece6']]),
+  age:   ramp([[0, '#d7301f'], [20, '#f0703c'], [45, '#f7c56a'], [80, '#9dcc6a'], [120, '#3a8fbf'], [180, '#3c2b78']]),
+  thick: ramp([[0, '#14182a'], [7, '#24466c'], [15, '#3f7d8a'], [25, '#7fae7a'], [35, '#d8c57a'], [50, '#e2803d'], [70, '#f4efe4']]),
+};
+function sample(map, v, out, o) {
+  if (v <= map[0][0]) { const c = map[0][1]; out[o] = c[0]; out[o+1] = c[1]; out[o+2] = c[2]; return; }
+  for (let k = 1; k < map.length; k++) if (v <= map[k][0]) {
+    const [v0, c0] = map[k - 1], [v1, c1] = map[k], s = (v - v0) / (v1 - v0);
+    out[o] = c0[0] + (c1[0] - c0[0]) * s; out[o+1] = c0[1] + (c1[1] - c0[1]) * s; out[o+2] = c0[2] + (c1[2] - c0[2]) * s; return;
+  }
+  const c = map[map.length - 1][1]; out[o] = c[0]; out[o+1] = c[1]; out[o+2] = c[2];
+}
+function hsl(h, s, l) { const a = s * Math.min(l, 1 - l), f = n => { const k = (n + h * 12) % 12; return 255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))); }; return [f(0), f(8), f(4)]; }
+
+// ---------- renderer ----------
+const canvas = document.getElementById('gl');
+const gl = canvas.getContext('webgl2', { antialias: true, alpha: true, premultipliedAlpha: true });
+const TEXW = 1024;
+let prog, vao, nIndex = 0, texColor, texNormal, texH = 1, colorBuf, normalBuf;
+
+function compile() {
+  const vs = `#version 300 es
+  in vec3 aPos; in uint aCell;
+  uniform mat4 uMVP, uMV;
+  flat out uint vCell; out vec3 vSph; out vec3 vView;
+  void main(){ vCell=aCell; vSph=aPos; vView=(uMV*vec4(aPos,1.0)).xyz; gl_Position=uMVP*vec4(aPos,1.0); }`;
+  const fs = `#version 300 es
+  precision highp float;
+  uniform sampler2D uColor, uNormal; uniform mat3 uRot;
+  flat in uint vCell; in vec3 vSph; in vec3 vView; out vec4 o;
+  void main(){
+    ivec2 tc=ivec2(int(vCell & 1023u), int(vCell >> 10));
+    vec3 col=texelFetch(uColor,tc,0).rgb;
+    vec3 n=uRot*normalize(texelFetch(uNormal,tc,0).xyz*2.0-1.0);
+    vec3 s=uRot*normalize(vSph);
+    vec3 L=normalize(vec3(-0.45,0.55,0.72));
+    vec3 V=normalize(-vView);
+    float diff=max(dot(n,L),0.0);
+    float rim=pow(1.0-max(dot(s,V),0.0),3.0);
+    vec3 c=col*(0.2+0.85*diff)+vec3(0.30,0.52,0.95)*rim*0.5;
+    o=vec4(c,1.0);
+  }`;
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs));
+  gl.bindAttribLocation(prog, 0, 'aPos'); gl.bindAttribLocation(prog, 1, 'aCell');
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  prog.u = {}; for (const n of ['uMVP', 'uMV', 'uRot', 'uColor', 'uNormal']) prog.u[n] = gl.getUniformLocation(prog, n);
+}
+// Each cell is drawn as a fan around its centre whose corners are the centroids of its incident triangles.
+function buildMesh(grid) {
+  const { N, pos, off, ring, tris } = grid;
+  const nVert = N + off[N], P = new Float32Array(nVert * 3), C = new Uint32Array(nVert), I = new Uint32Array(off[N] * 3);
+  let vi = 0, ii = 0;
+  for (let v = 0; v < N; v++) {
+    const c0 = vi; P[3*vi] = pos[3*v]; P[3*vi+1] = pos[3*v+1]; P[3*vi+2] = pos[3*v+2]; C[vi++] = v;
+    const d = off[v + 1] - off[v];
+    for (let k = 0; k < d; k++) {
+      const t = ring[off[v] + k], a = tris[3*t], b = tris[3*t+1], c = tris[3*t+2];
+      let x = pos[3*a] + pos[3*b] + pos[3*c], y = pos[3*a+1] + pos[3*b+1] + pos[3*c+1], z = pos[3*a+2] + pos[3*b+2] + pos[3*c+2];
+      const l = Math.hypot(x, y, z); P[3*vi] = x/l; P[3*vi+1] = y/l; P[3*vi+2] = z/l; C[vi++] = v;
+    }
+    for (let k = 0; k < d; k++) { I[ii++] = c0; I[ii++] = c0 + 1 + k; I[ii++] = c0 + 1 + (k + 1) % d; }
+  }
+  if (vao) gl.deleteVertexArray(vao);
+  vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+  const b0 = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b0); gl.bufferData(gl.ARRAY_BUFFER, P, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  const b1 = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b1); gl.bufferData(gl.ARRAY_BUFFER, C, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(1); gl.vertexAttribIPointer(1, 1, gl.UNSIGNED_INT, 0, 0);
+  const bi = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bi); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, I, gl.STATIC_DRAW);
+  gl.bindVertexArray(null);
+  nIndex = I.length;
+  texH = Math.ceil(N / TEXW);
+  colorBuf = new Uint8Array(TEXW * texH * 4); normalBuf = new Uint8Array(TEXW * texH * 4);
+  const mk = () => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, TEXW, texH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null); return t; };
+  if (texColor) { gl.deleteTexture(texColor); gl.deleteTexture(texNormal); }
+  texColor = mk(); texNormal = mk();
+}
+
+// ---------- camera ----------
+const cam = { q: qnorm(qmul(qaxis([1, 0, 0], 0.35), qaxis([0, 1, 0], -0.4))), dist: 4.3, spin: [0, 0], fov: 32 * Math.PI / 180 };
+function cssSize() { return [canvas.clientWidth || 1, canvas.clientHeight || 1]; }
+function effFovY() { const [w, h] = cssSize(), a = w / h; return a >= 1 ? cam.fov : 2 * Math.atan(Math.tan(cam.fov / 2) / a); }
+function planetPixelRadius() { const [, h] = cssSize(); return (h / 2) / (Math.tan(effFovY() / 2) * Math.sqrt(Math.max(cam.dist * cam.dist - 1, 0.01))); }
+function rotateView(dx, dy) {
+  const pr = planetPixelRadius(), ang = Math.hypot(dx, dy) / pr; if (ang === 0) return;
+  cam.q = qnorm(qmul(qaxis([dy / Math.hypot(dx, dy), dx / Math.hypot(dx, dy), 0], ang), cam.q));
+}
+function zoom(factor) { cam.dist = Math.min(10, Math.max(1.15, cam.dist * factor)); }
+
+function draw() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2), [cw, ch] = cssSize();
+  const W = Math.round(cw * dpr), H = Math.round(ch * dpr);
+  if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+  gl.viewport(0, 0, W, H);
+  gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  if (!nIndex) return;
+  const Rm = qmat(cam.q, new Float64Array(9));
+  const fy = 1 / Math.tan(effFovY() / 2), asp = W / H, near = 0.05, far = 20;
+  // column-major MV = translate(0,0,-dist) * R
+  const MV = new Float32Array([Rm[0], Rm[3], Rm[6], 0, Rm[1], Rm[4], Rm[7], 0, Rm[2], Rm[5], Rm[8], 0, 0, 0, -cam.dist, 1]);
+  const Pm = [fy / asp, 0, 0, 0, 0, fy, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, 2 * far * near / (near - far), 0];
+  const MVP = new Float32Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) { let s = 0; for (let k = 0; k < 4; k++) s += Pm[k * 4 + r] * MV[c * 4 + k]; MVP[c * 4 + r] = s; }
+  gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
+  gl.useProgram(prog);
+  gl.uniformMatrix4fv(prog.u.uMVP, false, MVP); gl.uniformMatrix4fv(prog.u.uMV, false, MV);
+  gl.uniformMatrix3fv(prog.u.uRot, false, new Float32Array([Rm[0], Rm[3], Rm[6], Rm[1], Rm[4], Rm[7], Rm[2], Rm[5], Rm[8]]));
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texColor); gl.uniform1i(prog.u.uColor, 0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, texNormal); gl.uniform1i(prog.u.uNormal, 1);
+  gl.bindVertexArray(vao); gl.drawElements(gl.TRIANGLES, nIndex, gl.UNSIGNED_INT, 0); gl.bindVertexArray(null);
+}
+
+// ---------- app state ----------
+const $ = id => document.getElementById(id);
+const ui = { view: 'elev', bounds: false, playing: true, dt: 2 };
+let grid = null, sim = null, fT, fAge, fH, stepMs = 0, dirty = true;
+function readWorldParams() { return { f: +$('res').value, contFrac: +$('cont').value, plates: +$('plates').value, radius: +$('radius').value, seed: Math.floor(+$('seed').value) || 1 }; }
+let applied = null;
+
+function resetWorld() {
+  const prm = readWorldParams();
+  grid = buildGrid(prm.f);
+  if (!applied || applied.f !== prm.f) buildMesh(grid);
+  sim = createSim(grid, prm);
+  fT = new Float32Array(grid.N); fAge = new Float32Array(grid.N); fH = new Float32Array(grid.N);
+  applied = prm; dirty = true; stepMs = 0;
+  markPending();
+}
+function markPending() {
+  const p = readWorldParams(), pend = applied && Object.keys(p).some(k => p[k] !== applied[k]);
+  $('reset').classList.toggle('pending', !!pend);
+  $('reset').textContent = pend ? 'Reset to apply' : 'Reset';
+}
+
+function updateTextures() {
+  const { N, pos, off, nbr } = grid, R = applied.radius;
+  sim.fields(fT, fAge, fH);
+  const own = sim.owner;
+  let cont = 0, land = 0; const alive = new Set();
+  const col = [0, 0, 0];
+  for (let i = 0; i < N; i++) {
+    const o = 4 * i, T = fT[i], h = fH[i];
+    if (T > T_CONT) cont++; if (h > 0) land++; alive.add(own[i]);
+    switch (ui.view) {
+      case 'elev': sample(h < 0 ? CM.ocean : CM.land, h, colorBuf, o); break;
+      case 'age': if (T > T_CONT) { colorBuf[o] = 128; colorBuf[o+1] = 124; colorBuf[o+2] = 116; } else sample(CM.age, fAge[i], colorBuf, o); break;
+      case 'thick': sample(CM.thick, T, colorBuf, o); break;
+      case 'plates': { const c = hsl((own[i] * 0.6180339) % 1, T > T_CONT ? 0.55 : 0.42, T > T_CONT ? 0.62 : 0.34); colorBuf[o] = c[0]; colorBuf[o+1] = c[1]; colorBuf[o+2] = c[2]; break; }
+    }
+    // relief normal from the elevation gradient (least squares over the neighbour ring)
+    const x = pos[3*i], y = pos[3*i+1], z = pos[3*i+2];
+    let gx = 0, gy = 0, gz = 0, ss = 0, edge = false;
+    for (let k = off[i]; k < off[i + 1]; k++) {
+      const j = nbr[k], dx = pos[3*j] - x, dy = pos[3*j+1] - y, dz = pos[3*j+2] - z, dh = fH[j] - h;
+      gx += dh * dx; gy += dh * dy; gz += dh * dz; ss += dx*dx + dy*dy + dz*dz;
+      if (own[j] !== own[i]) edge = true;
+    }
+    const exag = (h > 0 ? 45 : 14) * 2 / (ss * R);
+    gx *= exag; gy *= exag; gz *= exag;
+    const gr = gx * x + gy * y + gz * z; gx -= gr * x; gy -= gr * y; gz -= gr * z;
+    let nx = x - gx, ny = y - gy, nz = z - gz; const nl = Math.hypot(nx, ny, nz); nx /= nl; ny /= nl; nz /= nl;
+    normalBuf[o] = (nx * 0.5 + 0.5) * 255; normalBuf[o+1] = (ny * 0.5 + 0.5) * 255; normalBuf[o+2] = (nz * 0.5 + 0.5) * 255;
+    if (ui.bounds && edge) { colorBuf[o] = 255; colorBuf[o+1] = 236; colorBuf[o+2] = 214; }
+    colorBuf[o+3] = 255;
+  }
+  gl.bindTexture(gl.TEXTURE_2D, texColor); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, TEXW, texH, gl.RGBA, gl.UNSIGNED_BYTE, colorBuf);
+  gl.bindTexture(gl.TEXTURE_2D, texNormal); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, TEXW, texH, gl.RGBA, gl.UNSIGNED_BYTE, normalBuf);
+  const nf = new Intl.NumberFormat('en-US');
+  $('sCells').textContent = nf.format(N);
+  $('sSpacing').textContent = `${Math.round(grid.spacing * R)} km`;
+  $('sPlates').textContent = `${alive.size} of ${sim.P}`;
+  $('sCont').textContent = `${(100 * cont / N).toFixed(1)} %`;
+  $('sLand').textContent = `${(100 * land / N).toFixed(1)} %`;
+  $('sSub').textContent = sim.lastSub || '–';
+  $('sMs').textContent = stepMs ? `${stepMs.toFixed(0)} ms` : '–';
+  const tt = sim.time.toFixed(1); $('clock').textContent = tt; $('hudTime').textContent = tt;
+}
+
+const LEGENDS = {
+  elev: { css: () => grad([...CM.ocean.map(([v, c]) => [v, c]), ...CM.land.map(([v, c]) => [v, c])], -7, 5.5), ticks: ['−7 km', '0', '+5.5 km'] },
+  age: { css: () => grad(CM.age, 0, 180), ticks: ['0 Myr', '90', '180+ Myr'] },
+  thick: { css: () => grad(CM.thick, 0, 70), ticks: ['0 km', '35', '70 km'] },
+  plates: { css: () => `linear-gradient(90deg, ${Array.from({ length: 8 }, (_, p) => `rgb(${hsl((p * 0.6180339) % 1, 0.5, 0.5).map(Math.round)})`).join(',')})`, ticks: ['one hue per plate', 'lighter = continental'] },
+};
+function grad(map, lo, hi) { return `linear-gradient(90deg, ${map.map(([v, c]) => `rgb(${c}) ${((v - lo) / (hi - lo) * 100).toFixed(1)}%`).join(', ')})`; }
+function updateLegend() {
+  const L = LEGENDS[ui.view];
+  $('legendBar').style.background = L.css();
+  $('legendTicks').innerHTML = L.ticks.map(t => `<span>${t}</span>`).join('');
+}
+
+// ---------- controls ----------
+function fmtOutputs() {
+  const f = +$('res').value, N = 10 * f * f + 2, R = +$('radius').value;
+  const spacingKm = R * Math.sqrt(8 * Math.PI / (Math.sqrt(3) * N));
+  $('resOut').textContent = `f ${f} · ${new Intl.NumberFormat('en-US').format(N)} cells · ~${Math.round(spacingKm)} km`;
+  $('contOut').textContent = `${Math.round(+$('cont').value * 100)} %`;
+  $('platesOut').textContent = $('plates').value;
+  $('radiusOut').textContent = `${new Intl.NumberFormat('en-US').format(+$('radius').value)} km`;
+  $('dtOut').textContent = `${(+$('dt').value).toFixed(2)} Myr`;
+}
+['res', 'cont', 'plates', 'radius', 'seed'].forEach(id => $(id).addEventListener('input', () => { fmtOutputs(); markPending(); }));
+$('dt').addEventListener('input', () => { ui.dt = +$('dt').value; fmtOutputs(); });
+$('reseed').addEventListener('click', () => { $('seed').value = 1 + Math.floor(Math.random() * 99999); resetWorld(); });
+$('reset').addEventListener('click', resetWorld);
+function setPlaying(p) { ui.playing = p; $('play').textContent = p ? 'Pause' : 'Play'; }
+$('play').addEventListener('click', () => setPlaying(!ui.playing));
+$('stepBtn').addEventListener('click', () => { setPlaying(false); doStep(); });
+$('views').addEventListener('click', e => {
+  const b = e.target.closest('button[data-view]'); if (!b) return;
+  ui.view = b.dataset.view;
+  for (const x of $('views').querySelectorAll('button')) x.setAttribute('aria-pressed', x === b);
+  updateLegend(); dirty = true;
+});
+$('bounds').addEventListener('change', () => { ui.bounds = $('bounds').checked; dirty = true; });
+function setPanel(show) {
+  $('panel').hidden = !show;
+  $('toggle').textContent = show ? 'Hide controls' : 'Show controls';
+  $('toggle').setAttribute('aria-expanded', show);
+}
+$('toggle').addEventListener('click', () => setPanel($('panel').hidden));
+window.addEventListener('keydown', e => {
+  if (e.target.matches('input')) return;
+  if (e.code === 'Space') { e.preventDefault(); setPlaying(!ui.playing); }
+  else if (e.key === 'h' || e.key === 'H') setPanel($('panel').hidden);
+});
+
+// pointer: drag to orbit, pinch to zoom, wheel to zoom, with a little momentum
+const pointers = new Map(); let lastMove = 0;
+canvas.addEventListener('pointerdown', e => { canvas.setPointerCapture(e.pointerId); pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); cam.spin = [0, 0]; });
+canvas.addEventListener('pointermove', e => {
+  const p = pointers.get(e.pointerId); if (!p) return;
+  if (pointers.size === 1) {
+    const dx = e.clientX - p.x, dy = e.clientY - p.y; rotateView(dx, dy);
+    const now = performance.now(), dtm = Math.max(1, now - lastMove); lastMove = now;
+    cam.spin = [dx * 16 / dtm, dy * 16 / dtm];
+  } else if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    const d0 = Math.hypot(a.x - b.x, a.y - b.y), m0 = [(a.x + b.x) / 2, (a.y + b.y) / 2];
+    p.x = e.clientX; p.y = e.clientY;
+    const [c, d] = [...pointers.values()];
+    const d1 = Math.hypot(c.x - d.x, c.y - d.y), m1 = [(c.x + d.x) / 2, (c.y + d.y) / 2];
+    if (d1 > 0) zoom(d0 / d1);
+    rotateView(m1[0] - m0[0], m1[1] - m0[1]);
+    return;
+  }
+  p.x = e.clientX; p.y = e.clientY;
+});
+const endPtr = e => { pointers.delete(e.pointerId); if (performance.now() - lastMove > 80) cam.spin = [0, 0]; if (pointers.size) cam.spin = [0, 0]; };
+canvas.addEventListener('pointerup', endPtr); canvas.addEventListener('pointercancel', endPtr);
+canvas.addEventListener('wheel', e => { e.preventDefault(); const k = e.deltaMode === 1 ? 16 : 1; zoom(Math.exp(e.deltaY * k * (e.ctrlKey ? 0.01 : 0.0015))); }, { passive: false });
+let gScale = 1;
+canvas.addEventListener('gesturestart', e => { e.preventDefault(); gScale = e.scale; });
+canvas.addEventListener('gesturechange', e => { e.preventDefault(); zoom(gScale / e.scale); gScale = e.scale; });
+
+// ---------- loop ----------
+function doStep() { const t0 = performance.now(); sim.step(ui.dt); stepMs = performance.now() - t0; dirty = true; }
+function frame() {
+  if (ui.playing && sim) doStep();
+  if (dirty && sim) { updateTextures(); dirty = false; }
+  if (!pointers.size && (cam.spin[0] || cam.spin[1])) {
+    rotateView(cam.spin[0], cam.spin[1]);
+    cam.spin = cam.spin.map(v => Math.abs(v) < 0.02 ? 0 : v * 0.94);
+  }
+  draw();
+  requestAnimationFrame(frame);
+}
+
+if (!gl) {
+  $('err').hidden = false; $('err').textContent = 'This page needs WebGL2, which this browser did not provide.';
+} else {
+  try {
+    compile(); fmtOutputs(); updateLegend(); resetWorld();
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) setPlaying(false);
+    requestAnimationFrame(frame);
+  } catch (err) { $('err').hidden = false; $('err').textContent = 'Could not start: ' + err.message; console.error(err); }
+}
+</script>
