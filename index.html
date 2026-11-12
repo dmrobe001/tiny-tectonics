@@ -149,6 +149,10 @@ dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-va
         <input type="range" id="coll" min="-1" max="1" step="0.05" value="0">
       </div>
       <div class="ctl">
+        <label for="strength">Lithosphere strength <output id="strengthOut"></output></label>
+        <input type="range" id="strength" min="-1" max="1" step="0.05" value="0">
+      </div>
+      <div class="ctl">
         <label for="ocean">Ocean volume <output id="oceanOut"></output></label>
         <input type="range" id="ocean" min="0.5" max="4" step="0.05" value="2.6">
       </div>
@@ -163,6 +167,8 @@ dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-va
         <button type="button" data-view="thick" aria-pressed="false">Crust thickness</button>
         <button type="button" data-view="mantle" aria-pressed="false">Mantle temperature</button>
         <button type="button" data-view="damage" aria-pressed="false">Damage</button>
+        <button type="button" data-view="history" aria-pressed="false">Tectonic history</button>
+        <button type="button" data-view="strength" aria-pressed="false">Strength</button>
       </div>
       <label class="check"><input type="checkbox" id="arrows" checked> Plate velocity arrows</label>
       <label class="check"><input type="checkbox" id="bounds"> Outline plate boundaries</label>
@@ -181,6 +187,8 @@ dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-va
         <dt>Continental crust</dt><dd id="sCont">–</dd>
         <dt>Land above sea level</dt><dd id="sLand">–</dd>
         <dt>Sea level</dt><dd id="sSea">–</dd>
+        <dt>Rifts / welds so far</dt><dd id="sRift">–</dd>
+        <dt>Peak line load / strength</dt><dd id="sLoad">–</dd>
         <dt>Hotspots</dt><dd id="sHot">–</dd>
         <dt>Pinholes healed / step</dt><dd id="sHeal">–</dd>
         <dt>Substeps per step</dt><dd id="sSub">–</dd>
@@ -188,7 +196,7 @@ dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-va
       </dl>
     </section>
 
-    <p class="note">Phase&nbsp;1–2 of the design notes: plate-frame crust, compositing with subduction polarity, arcs, erosion, a spherical-harmonic mantle, hotspots, and a torque balance (basal drag, slab pull, contact resistance) that sets every plate's spin each substep. Welding and rifting are not in yet, so plate count only falls and colliding plates eventually jam into one rigid assembly.</p>
+    <p class="note">Phase&nbsp;1–2 of the design notes: plate-frame crust, compositing with subduction polarity, arcs, erosion, a spherical-harmonic mantle, hotspots, and a torque balance (basal drag, slab pull, contact resistance) that sets every plate's spin each substep. Every 10&nbsp;Myr, plates stalled against each other weld, and each plate tests its weakest lines for rifting. Known issue: by about 2 Gyr most runs settle into two slow hemispheric plates.</p>
     <p class="hint">Drag to orbit · scroll or pinch to zoom · <kbd>Space</kbd> pause · <kbd>H</kbd> hide panel</p>
   </aside>
 </div>
@@ -395,15 +403,30 @@ const K_ = {
   // Force-like constants only matter through their ratios. Drag coupling under ocean is the unit.
   C_OC: 1, C_ROOT: 4, TAU_ROOT: 300,                 // continental roots couple up to (1 + C_ROOT)x harder
   F_SP: 6e5,          // slab pull per unit trench length, in units of C_OC * km^2/Myr
-  K_COLL: 2e5,        // contact resistance per unit contact length (km), continental collision
+  K_COLL: 5e4,        // contact resistance per unit contact length (km), continental collision
   K_SUB: 2e3,         //   ... and at subduction contacts
   U0: 40,             // km/Myr of mantle flow per unit (unit-sphere) temperature gradient
   ALPHA: 1.0,         // mantle cooling per unit area subducted
-  BETA: 0.02,         // mantle warming per unit area of continent per Myr
+  BETA: 0.1,          // mantle warming per unit area of continent per Myr (0.02 never warmed enough to break a supercontinent)
   A_ARC: 0.35,        // km: arc volume per unit trench length per km of convergence (5% of subducted h_oc)
+  A_SE: 0.35,         // km: subduction erosion of continental upper plates, per km of convergence (addition)
   HS_BIRTH: 0.6,      // hotspot births per Myr per unit of area-weighted max(T,0) (unit sphere / 4pi)
   HS_RATE: 0.6,       // km/Myr of thickening above a hotspot
   D_COLL: 0.3,        // damage added per collision event
+  // rifting and welding (spec sections 9-10); strengths are forces per unit length, same units as F_SP
+  S_CONT: 7.5e5,      // continental base strength, young
+  CRATON: 2,          //   ... rising to (1 + CRATON)x after TAU_CRATON without events
+  TAU_CRATON: 500,
+  S_OC: 4e6,          // oceanic base strength at age 0, growing with sqrt(age / 10 Myr)
+  T_W: 0.5,           // mantle temperature (model units) that weakens by a factor e
+  DT_R: 10, K_SEEDS: 12, F_MIN: 0.1,
+  K_R: 0.005,         // damage growth rate per unit fractional overload, 1/Myr
+  EPS_R: 0.15,        // split when mean strength falls below EPS_R x mean base strength
+  RIFT_MIN_CELLS: 60, RIFT_MIN_FRAC: 0.02,
+  OVER_CAP: 5,        // cap on the fractional overload driving damage growth
+  V_WELD: 5, T_WELD: 20,
+  WELD_MAX_FRAC: 0.5,  // deviation: no weld may create a plate covering more than this fraction of the sphere
+  MAX_PLATES: 128,
 };
 const NY = K_.L * (K_.L + 2);
 
@@ -417,14 +440,18 @@ function createSim(grid, prm, dyn) {
   // ----- crust record pool; each plate holds an index from plate-frame cell to record -----
   let cap = Math.ceil(N * 1.6), top = 0;
   let Ty = new Int8Array(cap).fill(-1), H = new Float32Array(cap), T0 = new Float32Array(cap), D = new Float32Array(cap), SA = new Float32Array(cap), ST = new Float32Array(cap);
+  let TOR = new Float32Array(cap), KD = new Int8Array(cap); // time and kind of last event: 0 none, 1 collision, 2 rift, 3 suture
   const freeList = [];
   function growPool() {
     cap *= 2; const g = (A, C) => { const n = new C(cap); n.set(A); return n; };
     const ty = new Int8Array(cap).fill(-1); ty.set(Ty); Ty = ty;
     H = g(H, Float32Array); T0 = g(T0, Float32Array); D = g(D, Float32Array); SA = g(SA, Float32Array); ST = g(ST, Float32Array);
+    TOR = g(TOR, Float32Array); KD = g(KD, Int8Array);
   }
   const alloc = () => { if (freeList.length) return freeList.pop(); if (top >= cap) growPool(); return top++; };
   const release = s => { Ty[s] = -1; H[s] = 0; freeList.push(s); };
+  function copyRec(dst, src) { Ty[dst] = Ty[src]; H[dst] = H[src]; T0[dst] = T0[src]; D[dst] = D[src]; SA[dst] = SA[src]; ST[dst] = ST[src]; TOR[dst] = TOR[src]; KD[dst] = KD[src]; }
+  const coupling = (s, time) => Ty[s] === 1 ? K_.C_OC * (1 + K_.C_ROOT * Math.min(1, H[s] / H0) * Math.min(1, Math.max(0, time - T0[s]) / K_.TAU_ROOT)) : K_.C_OC;
   const subd = s => Ty[s] === 0 && H[s] < H_CRIT;
   function elevS(s, time) {
     if (Ty[s] === 1) return (H[s] - H0) * ISO;
@@ -466,7 +493,7 @@ function createSim(grid, prm, dyn) {
     const p = owner[i], x = pos[3*i], y = pos[3*i+1], z = pos[3*i+2], s = alloc();
     if (contLabel[i] >= 0) { Ty[s] = 1; H[s] = H0 + 2.5 * noiseB(x, y, z); T0[s] = -(900 + 300 * noiseC(x, y, z)); }
     else { Ty[s] = 0; H[s] = H_OC; T0[s] = -Math.min(180, Math.max(1, 70 + 45 * noiseC(x, y, z))); }
-    D[s] = 0; SA[s] = 0; ST[s] = -1e9;
+    D[s] = 0; SA[s] = 0; ST[s] = -1e9; TOR[s] = T0[s]; KD[s] = 0;
     plates[p].idx[i] = s; ref[i] = i; slotW[i] = s; plates[p].cells++;
   }
 
@@ -528,6 +555,7 @@ function createSim(grid, prm, dyn) {
   // ----- plate pairs: subduction polarity and time of last convergence -----
   const pairs = new Map();
   const pkey = (a, b) => a < b ? a * 4096 + b : b * 4096 + a;
+  const dropPairs = p => { for (const k of [...pairs.keys()]) if (Math.floor(k / 4096) === p || k % 4096 === p) pairs.delete(k); };
   function pairLower(p, sp, q, sq, time) {
     const k = pkey(p, q); const rec = pairs.get(k);
     if (rec && time - rec.last <= T_SLAB) { rec.last = time; return rec.lower; }
@@ -551,9 +579,8 @@ function createSim(grid, prm, dyn) {
     for (let i = 0; i < N; i++) {
       const p = owner[i], s = slotW[i];
       const x = pos[3*i], y = pos[3*i+1], z = pos[3*i+2], rx = R * x, ry = R * y, rz = R * z;
-      let c = K_.C_OC;
-      if (Ty[s] === 1) c *= 1 + K_.C_ROOT * Math.min(1, H[s] / H0) * Math.min(1, Math.max(0, time - T0[s]) / K_.TAU_ROOT);
-      const ca = c * area[i] * R2, m = 9 * p;
+      const ca = coupling(s, time) * area[i] * R2, m = 9 * p;
+      kapC[2*i] = kapC[2*i+1] = 0; kapQ[2*i] = kapQ[2*i+1] = -1; tSl[3*i] = 0; tSl[3*i+1] = 0; tSl[3*i+2] = 0;
       // M_p += c a (R^2 I - r r^T)
       Mm[m]   += ca * (R2 - rx * rx); Mm[m+1] -= ca * rx * ry; Mm[m+2] -= ca * rx * rz;
       Mm[m+3] -= ca * ry * rx; Mm[m+4] += ca * (R2 - ry * ry); Mm[m+5] -= ca * ry * rz;
@@ -572,7 +599,12 @@ function createSim(grid, prm, dyn) {
         const sj = slotW[j];
         const kap = K_.C_OC * (!subd(s) && !subd(sj) ? Kc : K_.K_SUB) * lEdge * 0.5; // each edge is seen from both sides
         const key = p < q ? p * 4096 + q : q * 4096 + p;
-        let C = contacts.get(key); if (!C) { C = new Float64Array(11); C[9] = Math.min(p, q); C[10] = Math.max(p, q); contacts.set(key, C); }
+        let C = contacts.get(key); if (!C) { C = new Float64Array(13); C[9] = Math.min(p, q); C[10] = Math.max(p, q); contacts.set(key, C); }
+        if (kapQ[2*i] < 0 || kapQ[2*i] === q) { kapQ[2*i] = q; kapC[2*i] += kap; } else { kapQ[2*i+1] = q; kapC[2*i+1] += kap; }
+        if (Ty[s] === 1 && Ty[sj] === 1) { // continental contact: track relative speed for welding
+          const wx = W[p][0] - W[q][0], wy = W[p][1] - W[q][1], wz = W[p][2] - W[q][2];
+          C[11] += R * Math.hypot(wy * z - wz * y, wz * x - wx * z, wx * y - wy * x); C[12]++;
+        }
         C[0] += kap * (R2 - rx * rx); C[1] -= kap * rx * ry; C[2] -= kap * rx * rz;
         C[3] -= kap * ry * rx; C[4] += kap * (R2 - ry * ry); C[5] -= kap * ry * rz;
         C[6] -= kap * rz * rx; C[7] -= kap * rz * ry; C[8] += kap * (R2 - rz * rz);
@@ -592,7 +624,8 @@ function createSim(grid, prm, dyn) {
         const nl = Math.hypot(nx, ny, nz); if (nl > 0) {
           const f = Fsp * Math.min(1, Math.sqrt(Math.max(0, SA[s]) / K_.TAU_REF)) * nf * lEdge / nl;
           const fx = f * nx, fy = f * ny, fz = f * nz;
-          bb[3*p] += ry * fz - rz * fy; bb[3*p+1] += rz * fx - rx * fz; bb[3*p+2] += rx * fy - ry * fx;
+          const tx = ry * fz - rz * fy, ty = rz * fx - rx * fz, tz = rx * fy - ry * fx;
+          bb[3*p] += tx; bb[3*p+1] += ty; bb[3*p+2] += tz; tSl[3*i] = tx; tSl[3*i+1] = ty; tSl[3*i+2] = tz;
           slabbed[p] = 1;
         }
       }
@@ -622,7 +655,18 @@ function createSim(grid, prm, dyn) {
     }
     for (let k = n - 1; k >= 0; k--) { let s = rhs[k]; for (let c = k + 1; c < n; c++) s -= A[k * n + c] * rhs[c]; rhs[k] = A[k * n + k] ? s / A[k * n + k] : 0; }
     for (let p = 0; p < P; p++) plates[p].w = [rhs[3*p], rhs[3*p+1], rhs[3*p+2]];
+    // welding clock: continental contact whose mean relative speed stays below V_WELD
+    for (const rec of pairs.values()) rec.cc = false;
+    for (const [key, C] of contacts) {
+      if (!C[12]) continue;
+      const rec = pairs.get(key); if (!rec) continue;
+      rec.cc = true;
+      if (C[11] / C[12] < K_.V_WELD) { if (rec.slowSince === undefined) rec.slowSince = time; }
+      else rec.slowSince = undefined;
+    }
+    for (const rec of pairs.values()) if (!rec.cc) rec.slowSince = undefined;
   }
+  const tSl = new Float64Array(3 * N), kapC = new Float64Array(2 * N), kapQ = new Int16Array(2 * N).fill(-1); // up to two contact partners per cell
 
   // ----- volcanic arcs: dh/dt = A v_conv g(delta), g a bump at D_ARC, by BFS from the front -----
   const visit = new Int32Array(N); let stamp = 0; const dH = new Float32Array(N);
@@ -637,13 +681,16 @@ function createSim(grid, prm, dyn) {
       const i = bq[head], k = bk[head], v = bv[head++], s = slotW[i], p = owner[i];
       const dh = K_.A_ARC * v * gArc[k] * h;
       H[s] += dh; D[s] = Math.min(1, D[s] + dh / H_OC);
+      // Addition (not in spec): subduction erosion removes continental crust at the front cell at A_SE * v per
+      // unit trench length, so continental margins roughly break even and net growth comes from oceanic arcs.
+      if (k === 0 && Ty[s] === 1) H[s] = Math.max(H_OC, H[s] - K_.A_SE * v * h / sKm);
       if (k >= KH) continue;
       for (let e = off[i]; e < off[i + 1]; e++) { const j = nbr[e]; if (visit[j] === stamp || owner[j] !== p) continue; visit[j] = stamp; bq[tail] = j; bk[tail] = k + 1; bv[tail++] = v; }
     }
   }
 
   // ----- compositing: world -> plate lookups, gaps, overlaps -----
-  const M = new Float64Array(9 * 64);
+  const M = new Float64Array(9 * K_.MAX_PLATES);
   const newOwner = new Int16Array(N), newRef = new Int32Array(N), newSlot = new Int32Array(N);
   const cand = new Int32Array(16), candR = new Int32Array(16), hitP = new Int32Array(16), hitR = new Int32Array(16), hitS = new Int32Array(16);
   let gaps = new Int32Array(1024), events = [];
@@ -673,7 +720,7 @@ function createSim(grid, prm, dyn) {
         const p = cand[0], r = candR[0], idx = plates[p].idx; let filled = 0, src = -1;
         for (let k = off[r]; k < off[r + 1]; k++) { const t = idx[nbr[k]]; if (t >= 0) { filled++; src = t; } }
         if (filled >= 4 && idx[r] === -1) { // never-occupied pinhole (-2 marks consumed crust)
-          const s = alloc(); Ty[s] = Ty[src]; H[s] = H[src]; T0[s] = T0[src]; D[s] = D[src]; SA[s] = SA[src]; ST[s] = ST[src];
+          const s = alloc(); copyRec(s, src);
           idx[r] = s; newOwner[i] = p; newRef[i] = r; newSlot[i] = s; sim.healed++; continue;
         }
         if (nGap >= gaps.length) { const g2 = new Int32Array(gaps.length * 2); g2.set(gaps); gaps = g2; }
@@ -689,7 +736,7 @@ function createSim(grid, prm, dyn) {
         pairLower(p, su, q, sl, time);
         if (subd(sl)) { subCount[i] += 1; events.push(i, q, time - T0[sl]); }
         else { // accretion or collision: conserve volume onto the upper cell
-          H[su] += H[sl]; D[su] = Math.min(1, D[su] + K_.D_COLL);
+          H[su] += H[sl]; D[su] = Math.min(1, D[su] + K_.D_COLL); TOR[su] = time; KD[su] = 1;
           if (Ty[su] === 0 && H[su] > H_CRIT) Ty[su] = 1;
         }
         plates[q].idx[hitR[k]] = -2; release(sl); // tombstone: consumed crust must not be healed back
@@ -707,7 +754,7 @@ function createSim(grid, prm, dyn) {
         const p = choice[n]; if (p < 0 || newOwner[i] >= 0) return;
         const x = pos[3*i], y = pos[3*i+1], z = pos[3*i+2], r = lookup(p, x, y, z);
         let s = plates[p].idx[r];
-        if (s < 0) { s = alloc(); Ty[s] = 0; H[s] = H_OC; T0[s] = time; D[s] = 0; SA[s] = 0; ST[s] = -1e9; plates[p].idx[r] = s; }
+        if (s < 0) { s = alloc(); Ty[s] = 0; H[s] = H_OC; T0[s] = time; D[s] = 0; SA[s] = 0; ST[s] = -1e9; TOR[s] = -1e9; KD[s] = 0; plates[p].idx[r] = s; }
         newOwner[i] = p; newRef[i] = r; newSlot[i] = s;
         for (let k = off[i]; k < off[i + 1]; k++) { const j = nbr[k]; if (newOwner[j] < 0 && mark[j] !== mstamp) { mark[j] = mstamp; next.push(j); } }
       });
@@ -727,7 +774,7 @@ function createSim(grid, prm, dyn) {
     // Erosion. Spec: h -> h0 + (h - h0) e^{-dt/tau_e} for h > h0, a pure volume sink. Deviation: the eroded
     // thickness is shed to lower same-plate neighbours (sediment), so crust volume is conserved and long-run
     // continental area tends to volume / h0. Thickened oceanic crust relaxes toward h_oc the same way.
-    // Oceanic recipients pushed past h_crit become continental, as for merged crust in the spec.
+    // Sediment never relabels crust: doing so stored continental volume as thin, submerged continent.
     dH.fill(0);
     for (let i = 0; i < N; i++) {
       const s = slotW[i], ref = Ty[s] === 1 ? H0 : H_OC; if (H[s] <= ref) continue;
@@ -736,7 +783,7 @@ function createSim(grid, prm, dyn) {
       dH[i] -= loss;
       if (m) { const g = loss / m; for (let k = off[i]; k < off[i + 1]; k++) { const j = nbr[k]; if (owner[j] === owner[i] && H[slotW[j]] < hNew) dH[j] += g; } }
     }
-    for (let i = 0; i < N; i++) if (dH[i] !== 0) { const s = slotW[i]; H[s] += dH[i]; if (dH[i] > 0 && Ty[s] === 0 && H[s] > H_CRIT) Ty[s] = 1; }
+    for (let i = 0; i < N; i++) if (dH[i] !== 0) H[slotW[i]] += dH[i];
     for (let i = 0; i < N; i++) { // spread thickness above H_MAX to same-plate neighbours
       const s = slotW[i]; if (H[s] <= H_MAX) continue;
       let m = 0; for (let k = off[i]; k < off[i + 1]; k++) if (owner[nbr[k]] === owner[i]) m++;
@@ -757,10 +804,217 @@ function createSim(grid, prm, dyn) {
     for (const hs of sim.hotspots) { const s = slotW[hs.i]; H[s] += K_.HS_RATE * h; D[s] = Math.min(1, D[s] + 0.02 * h); }
   }
 
+  // ----- rifting (spec section 10) and welding (section 9) -----
+  // Per-cell external torque on its plate at the solved angular velocity: basal drag, slab pull, contact.
+  // Summed over a whole plate this is ~0 (torque balance); summed over one side of a line it is tau_A.
+  function cellTorque(i, time, out, o) {
+    const p = owner[i], s = slotW[i], w = plates[p].w;
+    const x = pos[3*i], y = pos[3*i+1], z = pos[3*i+2], rx = R * x, ry = R * y, rz = R * z;
+    const ca = coupling(s, time) * area[i] * R2, ux = Uw[3*i], uy = Uw[3*i+1], uz = Uw[3*i+2];
+    const rw = rx * w[0] + ry * w[1] + rz * w[2];
+    let tx = ca * (ry * uz - rz * uy) - ca * (R2 * w[0] - rx * rw) + tSl[3*i];
+    let ty = ca * (rz * ux - rx * uz) - ca * (R2 * w[1] - ry * rw) + tSl[3*i+1];
+    let tz = ca * (rx * uy - ry * ux) - ca * (R2 * w[2] - rz * rw) + tSl[3*i+2];
+    for (let c = 2 * i; c < 2 * i + 2; c++) { // each edge was counted 1/2 per side; this side carries the whole edge here
+      if (!(kapC[c] > 0)) continue;
+      const wq = plates[kapQ[c]].w, dx = w[0] - wq[0], dy = w[1] - wq[1], dz = w[2] - wq[2], k = 2 * kapC[c];
+      const rd = rx * dx + ry * dy + rz * dz;
+      tx -= k * (R2 * dx - rx * rd); ty -= k * (R2 * dy - ry * rd); tz -= k * (R2 * dz - rz * rd);
+    }
+    out[o] = tx; out[o+1] = ty; out[o+2] = tz;
+  }
+  function strengthBase(s, time) {
+    const b = Ty[s] === 1 ? K_.S_CONT * (1 + K_.CRATON * Math.min(1, Math.max(0, time - TOR[s]) / K_.TAU_CRATON))
+                          : K_.S_OC * (1 + Math.sqrt(Math.max(0, time - T0[s]) / 10));
+    return b * dyn.strength;
+  }
+  const strength = (i, s, time) => strengthBase(s, time) * (1 - D[s]) * Math.exp(-Math.max(Tw[i], 0) / K_.T_W);
+
+  const loc = new Int32Array(N).fill(-1), lab = new Int32Array(N);
+  sim.rifts = 0; sim.welds = 0; sim.overload = 0; sim.balanceErr = 0; sim.riftLog = [];
+  function freePlateSlot() {
+    for (let p = 0; p < plates.length; p++) if (!plates[p].cells) {
+      const idx = plates[p].idx; // clear invisible leftovers before reuse
+      for (let r = 0; r < N; r++) { const t = idx[r]; if (t >= 0) release(t); idx[r] = -1; }
+      dropPairs(p); return p;
+    }
+    if (plates.length >= K_.MAX_PLATES) return -1;
+    plates.push({ idx: new Int32Array(N).fill(-1), q: [0, 0, 0, 1], w: [0, 0, 0], cells: 0, slab: false });
+    return plates.length - 1;
+  }
+
+  function riftPlate(p, time) {
+    const cellsP = []; for (let i = 0; i < N; i++) if (owner[i] === p) { loc[i] = cellsP.length; cellsP.push(i); }
+    const n = cellsP.length;
+    const cleanup = () => { for (const i of cellsP) loc[i] = -1; };
+    if (n < Math.max(K_.RIFT_MIN_CELLS, K_.RIFT_MIN_FRAC * N)) return cleanup(); // small plates do not rift
+    const S = new Float64Array(n), tq = new Float64Array(3 * n);
+    let total = 0, sx = 0, sy = 0, sz = 0, cxs = 0, cys = 0, czs = 0, tnorm = 0;
+    const bnd = [], isB = new Uint8Array(n);
+    for (let k = 0; k < n; k++) {
+      const i = cellsP[k], s = slotW[i];
+      S[k] = strength(i, s, time); total += area[i];
+      cellTorque(i, time, tq, 3 * k); sx += tq[3*k]; sy += tq[3*k+1]; sz += tq[3*k+2]; tnorm += Math.hypot(tq[3*k], tq[3*k+1], tq[3*k+2]);
+      cxs += pos[3*i]; cys += pos[3*i+1]; czs += pos[3*i+2];
+      for (let e = off[i]; e < off[i + 1]; e++) if (owner[nbr[e]] !== p) { bnd.push(i); isB[k] = 1; break; }
+    }
+    sim.balanceErr = Math.max(sim.balanceErr, Math.hypot(sx, sy, sz) / (tnorm || 1));
+    if (bnd.length < 4) return cleanup();
+    // seeds evenly around the perimeter, by angle about the plate centroid
+    const cl = Math.hypot(cxs, cys, czs) || 1, c = [cxs / cl, cys / cl, czs / cl];
+    let e1 = Math.abs(c[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]; const d1 = e1[0]*c[0] + e1[1]*c[1] + e1[2]*c[2];
+    e1 = [e1[0] - d1*c[0], e1[1] - d1*c[1], e1[2] - d1*c[2]]; const l1 = Math.hypot(...e1); e1 = e1.map(v => v / l1);
+    const e2 = [c[1]*e1[2] - c[2]*e1[1], c[2]*e1[0] - c[0]*e1[2], c[0]*e1[1] - c[1]*e1[0]];
+    const ang = bnd.map(i => Math.atan2(pos[3*i]*e2[0] + pos[3*i+1]*e2[1] + pos[3*i+2]*e2[2], pos[3*i]*e1[0] + pos[3*i+1]*e1[1] + pos[3*i+2]*e1[2]));
+    const KS = K_.K_SEEDS, phase = rng() * 2 * Math.PI / KS, seeds = [];
+    for (let k = 0; k < KS; k++) {
+      const th = -Math.PI + phase + 2 * Math.PI * k / KS; let best = -1, bd = 1e9;
+      for (let b = 0; b < bnd.length; b++) { let d = Math.abs(ang[b] - th); d = Math.min(d, 2 * Math.PI - d); if (d < bd) { bd = d; best = b; } }
+      const cell = loc[bnd[best]]; if (!seeds.includes(cell)) seeds.push(cell);
+    }
+    if (seeds.length < 4) return cleanup();
+    // Dijkstra from each seed with node cost S * l; candidate lines are tree paths between non-adjacent seeds
+    const dist = new Float64Array(n), prev = new Int32Array(n), done = new Uint8Array(n);
+    const hk = new Float64Array(off[N] + 16), hv = new Int32Array(off[N] + 16);
+    let best = null;
+    const comp = new Int32Array(n), stack = new Int32Array(n);
+    for (let a = 0; a < seeds.length; a++) {
+      dist.fill(Infinity); prev.fill(-1); done.fill(0); let hn = 0;
+      const push = (c, v) => { let k = hn++; while (k > 0) { const q = (k - 1) >> 1; if (hk[q] <= c) break; hk[k] = hk[q]; hv[k] = hv[q]; k = q; } hk[k] = c; hv[k] = v; };
+      dist[seeds[a]] = S[seeds[a]] * sKm; push(dist[seeds[a]], seeds[a]);
+      while (hn) {
+        const v = hv[0]; hn--; { const lc = hk[hn], lv = hv[hn]; let k = 0; for (;;) { let m = 2*k+1; if (m >= hn) break; if (m+1 < hn && hk[m+1] < hk[m]) m++; if (hk[m] >= lc) break; hk[k] = hk[m]; hv[k] = hv[m]; k = m; } hk[k] = lc; hv[k] = lv; }
+        if (done[v]) continue; done[v] = 1;
+        if (isB[v] && v !== seeds[a]) continue; // deviation: lines cross the interior; perimeter cells are endpoints only
+        const i = cellsP[v];
+        for (let e = off[i]; e < off[i + 1]; e++) { const u = loc[nbr[e]]; if (u < 0 || done[u]) continue; const nd = dist[v] + S[u] * sKm; if (nd < dist[u]) { dist[u] = nd; prev[u] = v; push(nd, u); } }
+      }
+      for (let b = a + 2; b < seeds.length; b++) {
+        if (a === 0 && b === seeds.length - 1) continue; // adjacent around the perimeter
+        if (dist[seeds[b]] === Infinity) continue;
+        const path = []; for (let v = seeds[b]; v >= 0; v = prev[v]) path.push(v);
+        // cut test: components of the plate with the path removed
+        comp.fill(-1); for (const v of path) comp[v] = -2;
+        const areas = [];
+        for (let v0 = 0; v0 < n; v0++) {
+          if (comp[v0] !== -1) continue;
+          const id = areas.length; let top = 0, A = 0; stack[top++] = v0; comp[v0] = id;
+          while (top) { const v = stack[--top], i = cellsP[v]; A += area[i];
+            for (let e = off[i]; e < off[i + 1]; e++) { const u = loc[nbr[e]]; if (u >= 0 && comp[u] === -1) { comp[u] = id; stack[top++] = u; } } }
+          areas.push(A);
+        }
+        if (areas.length < 2) continue;
+        let big = 0; for (let k = 1; k < areas.length; k++) if (areas[k] > areas[big]) big = k;
+        const aA = areas[big], aB = areas.reduce((x, y) => x + y, 0) - aA;
+        if (aA < K_.F_MIN * total || aB < K_.F_MIN * total) continue;
+        // tau_A, g = sum r x n dl (n from B into A), sigma = tau_A . g / g . g
+        let tAx = 0, tAy = 0, tAz = 0;
+        for (let v = 0; v < n; v++) if (comp[v] === big) { tAx += tq[3*v]; tAy += tq[3*v+1]; tAz += tq[3*v+2]; }
+        let gx = 0, gy = 0, gz = 0, Ssum = 0;
+        for (const v of path) {
+          const i = cellsP[v], x = pos[3*i], y = pos[3*i+1], z = pos[3*i+2]; let nx = 0, ny = 0, nz = 0;
+          Ssum += S[v];
+          for (let e = off[i]; e < off[i + 1]; e++) { const u = loc[nbr[e]]; if (u < 0 || comp[u] < 0) continue;
+            const sg = comp[u] === big ? 1 : -1, j = nbr[e]; nx += sg * (pos[3*j] - x); ny += sg * (pos[3*j+1] - y); nz += sg * (pos[3*j+2] - z); }
+          const nr = nx * x + ny * y + nz * z; nx -= nr * x; ny -= nr * y; nz -= nr * z; const nl = Math.hypot(nx, ny, nz); if (!nl) continue;
+          nx /= nl; ny /= nl; nz /= nl;
+          gx += sKm * R * (y * nz - z * ny); gy += sKm * R * (z * nx - x * nz); gz += sKm * R * (x * ny - y * nx);
+        }
+        const gg = gx * gx + gy * gy + gz * gz; if (!gg) continue;
+        const sigma = (tAx * gx + tAy * gy + tAz * gz) / gg, Sbar = Math.max(Ssum / path.length, 1e-6), over = (sigma - Sbar) / Sbar;
+        if (!best || over > best.over) best = { over, sigma, Sbar, path, comp: comp.slice(), big };
+      }
+    }
+    if (!best) return cleanup();
+    sim.overload = Math.max(sim.overload, best.sigma / best.Sbar); sim.loads.push(best.sigma / best.Sbar);
+    if (sim.noSplit) return cleanup();
+    if (best.over > 0) {
+      // damage growth on the stressed line: dd/dt = k_r (sigma - Sbar) / Sbar, over the check interval
+      const dd = K_.K_R * Math.min(best.over, K_.OVER_CAP) * K_.DT_R; // deviation: the spec's rate diverges as Sbar -> 0
+      let Snew = 0, Sb = 0;
+      for (const v of best.path) { const i = cellsP[v], s = slotW[i]; D[s] = Math.min(1, D[s] + dd); Snew += strength(i, s, time); Sb += strengthBase(s, time); }
+      if (Snew < K_.EPS_R * Sb) splitPlate(p, cellsP, best, time);
+    }
+    cleanup();
+  }
+
+  function splitPlate(p, cellsP, best, time) {
+    const np = freePlateSlot(); if (np < 0) return;
+    const side = lab; // 1 = A (keeps p, includes the line), 2 = B (new plate)
+    for (const i of cellsP) side[i] = 1;
+    for (let v = 0; v < cellsP.length; v++) if (best.comp[v] >= 0 && best.comp[v] !== best.big) side[cellsP[v]] = 2;
+    // rifted margin: the line and its B-side neighbours
+    for (const v of best.path) { const i = cellsP[v]; for (let e = off[i] - 1; e < off[i + 1]; e++) {
+      const j = e < off[i] ? i : nbr[e]; if (owner[j] !== p) continue; const s = slotW[j]; KD[s] = 2; TOR[s] = time; } }
+    // move plate-frame records whose world image lies on side B (same orientation, so no resampling)
+    const Rp = qmat(plates[p].q, new Float64Array(9)), ip = plates[p].idx, inew = plates[np].idx;
+    for (let r = 0; r < N; r++) {
+      const t = ip[r]; if (t === -1) continue;
+      const bx = pos[3*r], by = pos[3*r+1], bz = pos[3*r+2];
+      const w = locate(Rp[0]*bx + Rp[1]*by + Rp[2]*bz, Rp[3]*bx + Rp[4]*by + Rp[5]*bz, Rp[6]*bx + Rp[7]*by + Rp[8]*bz);
+      if (owner[w] === p && side[w] === 2) { inew[r] = t; ip[r] = -1; }
+    }
+    let nB = 0; for (const i of cellsP) if (side[i] === 2) { owner[i] = np; nB++; }
+    for (const i of cellsP) side[i] = 0;
+    Object.assign(plates[np], { q: plates[p].q.slice(), w: plates[p].w.slice(), cells: nB, slab: false, touched: true });
+    plates[p].touched = true;
+    plates[p].cells -= nB;
+    sim.rifts++; sim.riftLog.push({ t: time, p, np, cells: nB });
+  }
+
+  function weld(p, q, time) { // q merges into p
+    const Rp = qmat(plates[p].q, new Float64Array(9)), Rq = qmat(plates[q].q, new Float64Array(9));
+    const toP = (x, y, z) => locate(Rp[0]*x + Rp[3]*y + Rp[6]*z, Rp[1]*x + Rp[4]*y + Rp[7]*z, Rp[2]*x + Rp[5]*y + Rp[8]*z);
+    // suture: contact cells on both sides
+    for (let i = 0; i < N; i++) { const o = owner[i]; if (o !== p && o !== q) continue;
+      for (let e = off[i]; e < off[i + 1]; e++) { const u = owner[nbr[e]]; if ((o === p && u === q) || (o === q && u === p)) { const s = slotW[i]; D[s] = 1; KD[s] = 3; TOR[s] = time; break; } } }
+    // copy q's records into p's grid by nearest-cell lookup through q_p* q_q: the only resampling in the model
+    const iq = plates[q].idx, ip = plates[p].idx, merged = [];
+    for (let r = 0; r < N; r++) {
+      const t = iq[r]; iq[r] = -1; if (t < 0) continue;
+      const bx = pos[3*r], by = pos[3*r+1], bz = pos[3*r+2];
+      const rp = toP(Rq[0]*bx + Rq[1]*by + Rq[2]*bz, Rq[3]*bx + Rq[4]*by + Rq[5]*bz, Rq[6]*bx + Rq[7]*by + Rq[8]*bz);
+      if (ip[rp] < 0) ip[rp] = t; else { H[ip[rp]] += H[t]; merged.push(t); } // two land on one cell: conserve volume
+    }
+    for (let i = 0; i < N; i++) {
+      if (owner[i] !== q) continue;
+      const rp = toP(pos[3*i], pos[3*i+1], pos[3*i+2]);
+      if (ip[rp] < 0) { const s = alloc(); copyRec(s, slotW[i]); ip[rp] = s; }
+      owner[i] = p; ref[i] = rp; slotW[i] = ip[rp];
+    }
+    for (const t of merged) release(t);
+    plates[p].cells += plates[q].cells; plates[q].cells = 0; plates[p].touched = plates[q].touched = true;
+    dropPairs(q); pairs.delete(pkey(p, q));
+    sim.welds++;
+  }
+
+  function tectonicEvents(time) {
+    for (const [key, rec] of [...pairs]) {
+      if (rec.slowSince === undefined || time - rec.slowSince < K_.T_WELD) continue;
+      const a = Math.floor(key / 4096), b = key % 4096;
+      if (!plates[a] || !plates[b] || !plates[a].cells || !plates[b].cells) continue;
+      if (plates[a].cells + plates[b].cells > K_.WELD_MAX_FRAC * N) continue; // a near-global plate has no perimeter to rift from
+      if (plates[a].cells >= plates[b].cells) weld(a, b, time); else weld(b, a, time);
+    }
+    sim.overload = 0; sim.loads = [];
+    // each plate is tested once per check, and only if its angular velocity came from this check's solve
+    const P = plates.length, fresh = plates.map(pl => pl.cells > 0 && !pl.touched);
+    for (const pl of plates) pl.touched = false;
+    for (let p = 0; p < P; p++) if (fresh[p] && !plates[p].touched) riftPlate(p, time);
+  }
+
+  sim.strengthAt = i => strength(i, slotW[i], sim.time);
+  let nextCheck = K_.DT_R;
   function substep(h) {
     const time = sim.time + h;
     updateMantle(h);                 // 1. mantle coefficients (exact exponential update)
     solvePlates(sim.time);           // 2. forces and angular velocities
+    if (sim.time >= nextCheck) {     // 6. every DT_R: welding and rifting (done here, where torques are current)
+      nextCheck += K_.DT_R;
+      const before = sim.rifts + sim.welds;
+      tectonicEvents(sim.time);
+      if (sim.rifts + sim.welds !== before) solvePlates(sim.time);
+    }
     arcs(h);                         //    arc growth uses this step's convergence speeds
     if (M.length < 9 * plates.length) throw new Error('too many plates');
     for (let p = 0; p < plates.length; p++) { // 3. exact rotation
@@ -789,7 +1043,7 @@ function createSim(grid, prm, dyn) {
     const t = sim.time;
     for (let i = 0; i < N; i++) {
       const s = slotW[i];
-      out.E[i] = elevS(s, t); out.H[i] = H[s]; out.age[i] = t - T0[s]; out.type[i] = Ty[s]; out.D[i] = D[s];
+      out.E[i] = elevS(s, t); out.H[i] = H[s]; out.age[i] = t - T0[s]; out.type[i] = Ty[s]; out.D[i] = D[s]; out.kind[i] = KD[s]; out.since[i] = t - TOR[s];
     }
     const target = dyn.ocean * 4 * Math.PI; let lo = -15, hi = 15;
     for (let it = 0; it < 40; it++) {
@@ -812,6 +1066,7 @@ const CM = {
   age:   ramp([[0, '#d7301f'], [15, '#f0703c'], [35, '#f7c56a'], [60, '#9dcc6a'], [100, '#3a8fbf'], [180, '#3c2b78']]),
   thick: ramp([[0, '#14182a'], [7, '#24466c'], [15, '#3f7d8a'], [25, '#7fae7a'], [35, '#d8c57a'], [50, '#e2803d'], [70, '#f4efe4']]),
   mantle: ramp([[-1, '#2b4c9b'], [-0.5, '#5f86c4'], [0, '#e9e4dc'], [0.5, '#e2894f'], [1, '#a8262a']]),
+  strength: ramp([[0, '#3a1420'], [0.3, '#8a3b3b'], [0.6, '#c9925a'], [0.85, '#d9d6c7'], [1, '#f4f2ea']]),
   damage: ramp([[0, '#1c2230'], [0.25, '#4b3d6e'], [0.5, '#a3487a'], [0.75, '#ec7d4f'], [1, '#fbe27a']]),
 };
 function sample(map, v, out, o) {
@@ -822,6 +1077,7 @@ function sample(map, v, out, o) {
   }
   const c = map[map.length - 1][1]; out[o] = c[0]; out[o+1] = c[1]; out[o+2] = c[2];
 }
+const HIST = [[0, 0, 0], [240, 140, 60], [80, 210, 230], [230, 80, 200]]; // none, collision, rift, suture
 function hsl(h, s, l) { const a = s * Math.min(l, 1 - l), f = n => { const k = (n + h * 12) % 12; return 255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))); }; return [f(0), f(8), f(4)]; }
 
 // ---------- renderer ----------
@@ -947,7 +1203,7 @@ function draw() {
 // ---------- app state ----------
 const $ = id => document.getElementById(id);
 const ui = { view: 'elev', bounds: false, arrows: true, hotspots: true, playing: true, dt: 2 };
-const dyn = { slab: 1, flow: 1, insul: 1, coll: 1, ocean: 2.6 };
+const dyn = { slab: 1, flow: 1, insul: 1, coll: 1, strength: 1, ocean: 2.6 };
 let grid = null, sim = null, F = null, stepMs = 0, dirty = true, arrowGrid = null;
 function readWorldParams() { return { f: +$('res').value, contFrac: +$('cont').value, plates: +$('plates').value, radius: +$('radius').value, seed: Math.floor(+$('seed').value) || 1 }; }
 let applied = null;
@@ -958,7 +1214,7 @@ function resetWorld() {
   if (!applied || applied.f !== prm.f) buildMesh(grid);
   sim = createSim(grid, prm, dyn);
   const N = grid.N;
-  F = { E: new Float32Array(N), H: new Float32Array(N), age: new Float32Array(N), type: new Int8Array(N), D: new Float32Array(N), sea: 0 };
+  F = { E: new Float32Array(N), H: new Float32Array(N), age: new Float32Array(N), type: new Int8Array(N), D: new Float32Array(N), kind: new Int8Array(N), since: new Float32Array(N), sea: 0 };
   arrowGrid = buildGrid(10);
   applied = prm; dirty = true; stepMs = 0;
   markPending();
@@ -1003,6 +1259,10 @@ function updateTextures() {
       case 'thick': sample(CM.thick, F.H[i], colorBuf, o); break;
       case 'mantle': sample(CM.mantle, Tm[i] / (2 * tRms), colorBuf, o); if (cc) { colorBuf[o] *= 0.8; colorBuf[o+1] *= 0.8; colorBuf[o+2] *= 0.8; } break;
       case 'damage': sample(CM.damage, F.D[i], colorBuf, o); break;
+      case 'history': { // kind of last event, fading with time since it
+        const k = F.kind[i], f = k ? Math.exp(-F.since[i] / 400) : 0, base = cc ? 92 : 38, c = HIST[k];
+        colorBuf[o] = base + (c[0] - base) * f; colorBuf[o+1] = base + (c[1] - base) * f; colorBuf[o+2] = base + (c[2] - base) * f; break; }
+      case 'strength': sample(CM.strength, Math.log10(Math.max(1, sim.strengthAt(i))) / 7, colorBuf, o); break;
       case 'plates': { const c = hsl((own[i] * 0.6180339) % 1, cc ? 0.55 : 0.42, cc ? 0.62 : 0.34); colorBuf[o] = c[0]; colorBuf[o+1] = c[1]; colorBuf[o+2] = c[2]; break; }
     }
     // relief normal from the elevation gradient (least squares over the neighbour ring); water is flat in elevation view
@@ -1047,6 +1307,8 @@ function updateTextures() {
   $('sLand').textContent = `${(100 * land / A4).toFixed(1)} %`;
   $('sSea').textContent = `${sea >= 0 ? '+' : '−'}${Math.abs(sea).toFixed(2)} km`;
   $('sHot').textContent = sim.hotspots.length;
+  $('sRift').textContent = `${sim.rifts} / ${sim.welds}`;
+  $('sLoad').textContent = sim.overload ? sim.overload.toFixed(2) : '–';
   $('sHeal').textContent = sim.lastSub ? nf.format(sim.healed) : '–';
   $('sSub').textContent = sim.lastSub || '–';
   $('sMs').textContent = stepMs ? `${stepMs.toFixed(0)} ms` : '–';
@@ -1059,6 +1321,8 @@ const LEGENDS = {
   thick: { css: () => grad(CM.thick, 0, 70), ticks: ['0 km', '35', '70 km'] },
   mantle: { css: () => grad(CM.mantle, -1, 1), ticks: ['cold', 'mean', 'hot (±2 rms)'] },
   damage: { css: () => grad(CM.damage, 0, 1), ticks: ['0 intact', '0.5', '1 broken'] },
+  history: { css: () => `linear-gradient(90deg, rgb(${HIST[1]}) 0 33%, rgb(${HIST[2]}) 33% 66%, rgb(${HIST[3]}) 66%)`, ticks: ['collision', 'rift', 'suture · fades over ~400 Myr'] },
+  strength: { css: () => grad(CM.strength, 0, 1), ticks: ['weak', '10^3.5', '10^7 strong'] },
   plates: { css: () => `linear-gradient(90deg, ${Array.from({ length: 8 }, (_, p) => `rgb(${hsl((p * 0.6180339) % 1, 0.5, 0.5).map(Math.round)})`).join(',')})`, ticks: ['one hue per plate', 'lighter = continental'] },
 };
 function grad(map, lo, hi) { return `linear-gradient(90deg, ${map.map(([v, c]) => `rgb(${c}) ${((v - lo) / (hi - lo) * 100).toFixed(1)}%`).join(', ')})`; }
@@ -1078,11 +1342,11 @@ function fmtOutputs() {
   $('platesOut').textContent = $('plates').value;
   $('radiusOut').textContent = `${nf.format(R)} km`;
   $('dtOut').textContent = `${(+$('dt').value).toFixed(2)} Myr`;
-  for (const id of ['slab', 'flow', 'insul', 'coll']) { dyn[id] = mult(id); $(id + 'Out').textContent = `×${dyn[id].toFixed(2)}`; }
+  for (const id of ['slab', 'flow', 'insul', 'coll', 'strength']) { dyn[id] = mult(id); $(id + 'Out').textContent = `×${dyn[id].toFixed(2)}`; }
   dyn.ocean = +$('ocean').value; $('oceanOut').textContent = `${dyn.ocean.toFixed(2)} km mean depth`;
 }
 ['res', 'cont', 'plates', 'radius', 'seed'].forEach(id => $(id).addEventListener('input', () => { fmtOutputs(); markPending(); }));
-['slab', 'flow', 'insul', 'coll', 'ocean'].forEach(id => $(id).addEventListener('input', () => { fmtOutputs(); dirty = true; }));
+['slab', 'flow', 'insul', 'coll', 'strength', 'ocean'].forEach(id => $(id).addEventListener('input', () => { fmtOutputs(); dirty = true; }));
 $('dt').addEventListener('input', () => { ui.dt = +$('dt').value; fmtOutputs(); });
 $('reseed').addEventListener('click', () => { $('seed').value = 1 + Math.floor(Math.random() * 99999); resetWorld(); });
 $('reset').addEventListener('click', resetWorld);
