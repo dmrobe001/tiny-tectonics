@@ -99,7 +99,7 @@ dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-va
       <div class="eyebrow">Run</div>
       <div class="ctl">
         <label for="dt">Time step <output id="dtOut"></output></label>
-        <input type="range" id="dt" min="0.25" max="20" step="0.25" value="2">
+        <input type="range" id="dt" min="0.25" max="10" step="0.25" value="2">
       </div>
     </section>
 
@@ -131,14 +131,42 @@ dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-va
     </section>
 
     <section>
+      <div class="eyebrow">Dynamics · live</div>
+      <div class="ctl">
+        <label for="slab">Slab pull <output id="slabOut"></output></label>
+        <input type="range" id="slab" min="-1" max="1" step="0.05" value="0">
+      </div>
+      <div class="ctl">
+        <label for="flow">Mantle flow <output id="flowOut"></output></label>
+        <input type="range" id="flow" min="-1" max="1" step="0.05" value="0">
+      </div>
+      <div class="ctl">
+        <label for="insul">Continental insulation <output id="insulOut"></output></label>
+        <input type="range" id="insul" min="-1" max="1" step="0.05" value="0">
+      </div>
+      <div class="ctl">
+        <label for="coll">Collision resistance <output id="collOut"></output></label>
+        <input type="range" id="coll" min="-1" max="1" step="0.05" value="0">
+      </div>
+      <div class="ctl">
+        <label for="ocean">Ocean volume <output id="oceanOut"></output></label>
+        <input type="range" id="ocean" min="0.5" max="4" step="0.05" value="2.6">
+      </div>
+    </section>
+
+    <section>
       <div class="eyebrow">View</div>
       <div class="seg" id="views">
         <button type="button" data-view="elev" aria-pressed="true">Elevation</button>
         <button type="button" data-view="plates" aria-pressed="false">Plates</button>
         <button type="button" data-view="age" aria-pressed="false">Seafloor age</button>
         <button type="button" data-view="thick" aria-pressed="false">Crust thickness</button>
+        <button type="button" data-view="mantle" aria-pressed="false">Mantle temperature</button>
+        <button type="button" data-view="damage" aria-pressed="false">Damage</button>
       </div>
+      <label class="check"><input type="checkbox" id="arrows" checked> Plate velocity arrows</label>
       <label class="check"><input type="checkbox" id="bounds"> Outline plate boundaries</label>
+      <label class="check"><input type="checkbox" id="hotspots" checked> Mark hotspots</label>
       <div class="legend" id="legend"><div class="bar" id="legendBar"></div><div class="ticks" id="legendTicks"></div></div>
     </section>
 
@@ -148,14 +176,19 @@ dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-va
         <dt>Cells</dt><dd id="sCells">–</dd>
         <dt>Mean spacing</dt><dd id="sSpacing">–</dd>
         <dt>Plates with crust</dt><dd id="sPlates">–</dd>
+        <dt>Plate speed, mean / max</dt><dd id="sSpeed">–</dd>
+        <dt>Plates pulled by slabs</dt><dd id="sSlab">–</dd>
         <dt>Continental crust</dt><dd id="sCont">–</dd>
         <dt>Land above sea level</dt><dd id="sLand">–</dd>
+        <dt>Sea level</dt><dd id="sSea">–</dd>
+        <dt>Hotspots</dt><dd id="sHot">–</dd>
+        <dt>Pinholes healed / step</dt><dd id="sHeal">–</dd>
         <dt>Substeps per step</dt><dd id="sSub">–</dd>
         <dt>Compute per step</dt><dd id="sMs">–</dd>
       </dl>
     </section>
 
-    <p class="note">Phase&nbsp;0 scaffold. Plates are rigid caps turning about fixed Euler poles. Overlaps are resolved by buoyancy and gaps fill with new seafloor. These are placeholder rules until the full algorithm lands.</p>
+    <p class="note">Phase&nbsp;1–2 of the design notes: plate-frame crust, compositing with subduction polarity, arcs, erosion, a spherical-harmonic mantle, hotspots, and a torque balance (basal drag, slab pull, contact resistance) that sets every plate's spin each substep. Welding and rifting are not in yet, so plate count only falls and colliding plates eventually jam into one rigid assembly.</p>
     <p class="hint">Drag to orbit · scroll or pinch to zoom · <kbd>Space</kbd> pause · <kbd>H</kbd> hide panel</p>
   </aside>
 </div>
@@ -163,11 +196,10 @@ dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-va
 <script>
 'use strict';
 /* ============================================================================
-   Tiny Tectonics — phase 0
-   Geodesic grid (icosahedron, frequency f: N = 10 f^2 + 2 cells, 12 pentagons),
-   rigid plates stored as body-frame rasters on the same lattice, WebGL2 render.
+   Tiny Tectonics
+   Spec: docs/tectonics_model.tex ("A Kinematic Plate Tectonics Model").
+   Geodesic grid (icosahedron, frequency f: N = 10 f^2 + 2 cells, 12 pentagons).
    ========================================================================== */
-
 // ---------- small math ----------
 function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 function gauss(rng) { return Math.sqrt(-2 * Math.log(1 - rng())) * Math.cos(2 * Math.PI * rng()); }
@@ -310,36 +342,99 @@ function buildGrid(f) {
   let sum = 0;
   for (let v = 0; v < N; v++) for (let k = off[v]; k < off[v + 1]; k++) { const u = nbr[k]; sum += Math.acos(Math.min(1, pos[3*v]*pos[3*u] + pos[3*v+1]*pos[3*u+1] + pos[3*v+2]*pos[3*u+2])); }
   const spacing = sum / off[N];
-  const grid = { f, N, pos, off, nbr, ring, tris, NT, locate, spacing };
+  // cell areas on the unit sphere: fan of planar triangles over the dual polygon, rescaled to total 4*pi
+  const area = new Float64Array(N); let atot = 0;
+  const cen = new Float64Array(NT * 3);
+  for (let tt = 0; tt < NT; tt++) {
+    const a = tris[3*tt], b = tris[3*tt+1], c = tris[3*tt+2];
+    let x = pos[3*a] + pos[3*b] + pos[3*c], y = pos[3*a+1] + pos[3*b+1] + pos[3*c+1], z = pos[3*a+2] + pos[3*b+2] + pos[3*c+2];
+    const l = Math.hypot(x, y, z); cen[3*tt] = x/l; cen[3*tt+1] = y/l; cen[3*tt+2] = z/l;
+  }
+  for (let v = 0; v < N; v++) {
+    const d = off[v + 1] - off[v]; let A = 0;
+    for (let k = 0; k < d; k++) {
+      const t1 = ring[off[v] + k], t2 = ring[off[v] + (k + 1) % d];
+      const ax = cen[3*t1] - pos[3*v], ay = cen[3*t1+1] - pos[3*v+1], az = cen[3*t1+2] - pos[3*v+2];
+      const bx = cen[3*t2] - pos[3*v], by = cen[3*t2+1] - pos[3*v+1], bz = cen[3*t2+2] - pos[3*v+2];
+      A += 0.5 * Math.hypot(ay*bz - az*by, az*bx - ax*bz, ax*by - ay*bx);
+    }
+    area[v] = A; atot += A;
+  }
+  for (let v = 0; v < N; v++) area[v] *= 4 * Math.PI / atot;
+  const grid = { f, N, pos, off, nbr, ring, tris, NT, locate, spacing, area, cen };
   gridCache.set(f, grid);
   return grid;
 }
 
-// ---------- simulation (placeholder physics) ----------
-const T_OCEAN = 7;     // km, fresh oceanic crust
-const T_CONT = 20;     // km, threshold above which crust counts as continental
-const F_ARC = 0.1;     // fraction of subducted oceanic crust volume returned to the overriding cell
-const KAPPA = 3000;    // km^2/Myr, lateral relaxation of thick continental crust
 
-function smoothstep(a, b, x) { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
-// Elevation (km relative to sea level): half-space cooling for seafloor, Airy isostasy for continents.
-function elevation(T, age) {
-  const ho = -2.6 - 0.33 * Math.sqrt(Math.min(Math.max(age, 0), 160));
-  const hc = 0.5 + 0.15 * (T - 35);
-  const w = smoothstep(8, 28, T);
-  return ho * (1 - w) + hc * w;
+// ---------- real orthonormal spherical harmonics, l = 1..L ----------
+// index of (l, m) is l*l - 1 + (m + l); the l = 0 term is omitted so the mean cannot drift.
+const FACT = [1]; for (let k = 1; k <= 40; k++) FACT[k] = FACT[k - 1] * k;
+function shBasis(x, y, z, L, out) {
+  const ct = Math.max(-1, Math.min(1, z)), st = Math.sqrt(Math.max(0, 1 - ct * ct)), ph = Math.atan2(y, x);
+  for (let m = 0; m <= L; m++) {
+    let pmm = 1; for (let k = 1; k <= m; k++) pmm *= (2 * k - 1) * st;
+    let a = pmm, prev = 0;
+    for (let l = m; l <= L; l++) {
+      if (l > m) { const nx = l === m + 1 ? ct * (2 * m + 1) * pmm : ((2 * l - 1) * ct * a - (l + m - 1) * prev) / (l - m); prev = a; a = nx; }
+      if (l < 1) continue;
+      const K = Math.sqrt((2 * l + 1) / (4 * Math.PI) * FACT[l - m] / FACT[l + m]), base = l * l - 1 + l;
+      if (m === 0) out[base] = K * a;
+      else { out[base + m] = Math.SQRT2 * K * Math.cos(m * ph) * a; out[base - m] = Math.SQRT2 * K * Math.sin(m * ph) * a; }
+    }
+  }
 }
 
-function createSim(grid, prm) {
-  const { N, pos, off, nbr, locate } = grid;
-  const P = prm.plates, R = prm.radius;
+// ---------- model parameters (docs/tectonics_model.tex, "Parameters") ----------
+const K_ = {
+  H_OC: 7, H0: 35, H_MAX: 70, H_CRIT: 15,          // km
+  ISO: 0.15, ZR: 2.5, KZ: 0.35, TFLAT: 80,           // isostasy and ocean depth
+  TAU_E: 200, TAU_H: 1000,                           // erosion, damage healing (Myr)
+  L: 6, TAU_M: 150, EPS: 0.05,                       // mantle
+  TAU_HS: 100, TAU_REF: 80, T_SLAB: 10, D_ARC: 200,  // hotspots, slabs, arcs
+  // Force-like constants only matter through their ratios. Drag coupling under ocean is the unit.
+  C_OC: 1, C_ROOT: 4, TAU_ROOT: 300,                 // continental roots couple up to (1 + C_ROOT)x harder
+  F_SP: 6e5,          // slab pull per unit trench length, in units of C_OC * km^2/Myr
+  K_COLL: 2e5,        // contact resistance per unit contact length (km), continental collision
+  K_SUB: 2e3,         //   ... and at subduction contacts
+  U0: 40,             // km/Myr of mantle flow per unit (unit-sphere) temperature gradient
+  ALPHA: 1.0,         // mantle cooling per unit area subducted
+  BETA: 0.02,         // mantle warming per unit area of continent per Myr
+  A_ARC: 0.35,        // km: arc volume per unit trench length per km of convergence (5% of subducted h_oc)
+  HS_BIRTH: 0.6,      // hotspot births per Myr per unit of area-weighted max(T,0) (unit sphere / 4pi)
+  HS_RATE: 0.6,       // km/Myr of thickening above a hotspot
+  D_COLL: 0.3,        // damage added per collision event
+};
+const NY = K_.L * (K_.L + 2);
+
+function createSim(grid, prm, dyn) {
+  const { N, pos, off, nbr, locate, area } = grid;
+  const R = prm.radius, R2 = R * R, sKm = grid.spacing * R, lEdge = sKm / Math.sqrt(3);
   const rng = mulberry32(prm.seed >>> 0 || 1);
   const noiseA = makeNoise(rng), noiseB = makeNoise(rng), noiseC = makeNoise(rng, 24, 1, 6);
+  const { H_OC, H0, H_MAX, H_CRIT, ISO, ZR, KZ, TFLAT, T_SLAB } = K_;
 
-  // noisy multi-source Dijkstra growth on the cell graph
+  // ----- crust record pool; each plate holds an index from plate-frame cell to record -----
+  let cap = Math.ceil(N * 1.6), top = 0;
+  let Ty = new Int8Array(cap).fill(-1), H = new Float32Array(cap), T0 = new Float32Array(cap), D = new Float32Array(cap), SA = new Float32Array(cap), ST = new Float32Array(cap);
+  const freeList = [];
+  function growPool() {
+    cap *= 2; const g = (A, C) => { const n = new C(cap); n.set(A); return n; };
+    const ty = new Int8Array(cap).fill(-1); ty.set(Ty); Ty = ty;
+    H = g(H, Float32Array); T0 = g(T0, Float32Array); D = g(D, Float32Array); SA = g(SA, Float32Array); ST = g(ST, Float32Array);
+  }
+  const alloc = () => { if (freeList.length) return freeList.pop(); if (top >= cap) growPool(); return top++; };
+  const release = s => { Ty[s] = -1; H[s] = 0; freeList.push(s); };
+  const subd = s => Ty[s] === 0 && H[s] < H_CRIT;
+  function elevS(s, time) {
+    if (Ty[s] === 1) return (H[s] - H0) * ISO;
+    return -(ZR + KZ * Math.sqrt(Math.min(Math.max(time - T0[s], 0), TFLAT))) + Math.max(0, H[s] - H_OC) * ISO;
+  }
+
+  // ----- initial conditions: randomised flood fill (noisy multi-source Dijkstra) -----
   function grow(seeds, rates, label, limit) {
-    const cap = off[N] + seeds.length + 8;
-    const hc = new Float64Array(cap), hv = new Int32Array(cap), hl = new Int32Array(cap); let hn = 0;
+    const hcap = off[N] + seeds.length + 8;
+    const hc = new Float64Array(hcap), hv = new Int32Array(hcap), hl = new Int32Array(hcap); let hn = 0;
     const push = (c, v, l) => { let k = hn++; while (k > 0) { const p = (k - 1) >> 1; if (hc[p] <= c) break; hc[k] = hc[p]; hv[k] = hv[p]; hl[k] = hl[p]; k = p; } hc[k] = c; hv[k] = v; hl[k] = l; };
     const pop = () => { const c = hc[0], v = hv[0], l = hl[0]; hn--; const lc = hc[hn], lv = hv[hn], ll = hl[hn]; let k = 0;
       for (;;) { let m = 2 * k + 1; if (m >= hn) break; if (m + 1 < hn && hc[m + 1] < hc[m]) m++; if (hc[m] >= lc) break; hc[k] = hc[m]; hv[k] = hv[m]; hl[k] = hl[m]; k = m; }
@@ -352,121 +447,359 @@ function createSim(grid, prm) {
       label[v] = l; count++;
       for (let k = off[v]; k < off[v + 1]; k++) {
         const u = nbr[k]; if (label[u] >= 0) continue;
-        const w = Math.exp(0.8 * noiseA(pos[3*u], pos[3*u+1], pos[3*u+2])) * (0.5 + rng()) / rates[l];
-        push(c + w, u, l);
+        push(c + Math.exp(0.8 * noiseA(pos[3*u], pos[3*u+1], pos[3*u+2])) * (0.5 + rng()) / rates[l], u, l);
       }
     }
   }
   const pick = n => { const s = new Set(); while (s.size < n) s.add(Math.floor(rng() * N)); return [...s]; };
-
+  const P0 = prm.plates;
   const owner = new Int16Array(N).fill(-1);
-  grow(pick(P), Array.from({ length: P }, () => Math.exp(0.45 * gauss(rng))), owner, N);
+  grow(pick(P0), Array.from({ length: P0 }, () => Math.exp(0.45 * gauss(rng))), owner, N);
   const contLabel = new Int16Array(N).fill(-1);
   const K = 2 + Math.floor(rng() * 5);
   grow(pick(K), Array.from({ length: K }, () => Math.exp(0.35 * gauss(rng))), contLabel, Math.round(prm.contFrac * N));
 
-  // plate layers: thickness T (0 = no crust) and birth time, indexed p*N + bodyCell
-  const layerT = new Float32Array(P * N), layerB = new Float32Array(P * N);
-  const ref = new Int32Array(N);
-  const contCount = new Float64Array(P), area = new Float64Array(P);
+  const plates = [];
+  for (let p = 0; p < P0; p++) plates.push({ idx: new Int32Array(N).fill(-1), q: [0, 0, 0, 1], w: [0, 0, 0], cells: 0, slab: false });
+  const ref = new Int32Array(N), slotW = new Int32Array(N);
   for (let i = 0; i < N; i++) {
-    const p = owner[i], x = pos[3*i], y = pos[3*i+1], z = pos[3*i+2];
-    const cont = contLabel[i] >= 0;
-    layerT[p * N + i] = cont ? 35 + 4 * noiseB(x, y, z) : T_OCEAN;
-    layerB[p * N + i] = -Math.max(5, 70 + 35 * noiseC(x, y, z));
-    ref[i] = i; area[p]++; if (cont) contCount[p]++;
+    const p = owner[i], x = pos[3*i], y = pos[3*i+1], z = pos[3*i+2], s = alloc();
+    if (contLabel[i] >= 0) { Ty[s] = 1; H[s] = H0 + 2.5 * noiseB(x, y, z); T0[s] = -(900 + 300 * noiseC(x, y, z)); }
+    else { Ty[s] = 0; H[s] = H_OC; T0[s] = -Math.min(180, Math.max(1, 70 + 45 * noiseC(x, y, z))); }
+    D[s] = 0; SA[s] = 0; ST[s] = -1e9;
+    plates[p].idx[i] = s; ref[i] = i; slotW[i] = s; plates[p].cells++;
   }
-  // kinematics: random Euler poles; continent-laden plates move slower
-  const axis = [], omega = new Float64Array(P), quat = [];
-  for (let p = 0; p < P; p++) {
-    const z = 2 * rng() - 1, ph = 2 * Math.PI * rng(), r = Math.sqrt(1 - z * z);
-    axis.push([r * Math.cos(ph), r * Math.sin(ph), z]);
-    const cmPerYr = (2 + 7 * rng()) / (1 + 2 * contCount[p] / Math.max(1, area[p]));
-    omega[p] = cmPerYr * 10 / R; // 1 cm/yr = 10 km/Myr
-    quat.push([0, 0, 0, 1]);
-  }
-  const M = new Float64Array(P * 9);
-  const newOwner = new Int16Array(N), newRef = new Int32Array(N);
-  const Tw = new Float32Array(N), Tn = new Float32Array(N);
-  const cand = new Int32Array(8), candR = new Int32Array(8), hitP = new Int32Array(8), hitR = new Int32Array(8);
-  const sim = { grid, prm, N, P, time: 0, owner, ref, layerT, layerB, omega, axis, quat, lastSub: 0 };
 
-  function substep(h) {
-    const time = sim.time + h;
-    for (let p = 0; p < P; p++) {
-      quat[p] = qnorm(qmul(qaxis(axis[p], omega[p] * h), quat[p]));
-      qmat(quat[p], M, 9 * p); // body -> world; we apply its transpose
+  // ----- mantle: harmonics evaluated on a coarse helper grid, interpolated to the world grid -----
+  const cg = buildGrid(Math.min(16, grid.f));
+  const Nc = cg.N, Yc = new Float64Array(Nc * NY), tmpY = new Float64Array(NY);
+  for (let c = 0; c < Nc; c++) { shBasis(cg.pos[3*c], cg.pos[3*c+1], cg.pos[3*c+2], K_.L, tmpY); Yc.set(tmpY, c * NY); }
+  // Gaussian-weighted interpolation from a coarse cell and its ring (<= 7 weights per world cell)
+  const IW = 7, iIdx = new Int32Array(N * IW), iW = new Float32Array(N * IW);
+  { const sig2 = (cg.spacing * 0.7) ** 2;
+    for (let i = 0; i < N; i++) {
+      const x = pos[3*i], y = pos[3*i+1], z = pos[3*i+2], c0 = cg.locate(x, y, z);
+      const list = [c0]; for (let k = cg.off[c0]; k < cg.off[c0 + 1]; k++) list.push(cg.nbr[k]);
+      let ws = 0;
+      for (let k = 0; k < IW; k++) {
+        const c = list[k] ?? c0, d2 = (x - cg.pos[3*c]) ** 2 + (y - cg.pos[3*c+1]) ** 2 + (z - cg.pos[3*c+2]) ** 2;
+        const w = k < list.length ? Math.exp(-d2 / sig2) : 0; iIdx[i * IW + k] = c; iW[i * IW + k] = w; ws += w;
+      }
+      for (let k = 0; k < IW; k++) iW[i * IW + k] /= ws;
     }
-    const own = sim.owner, rf = sim.ref;
+  }
+  const Tlm = new Float64Array(NY);
+  for (let k = 0; k < NY; k++) { const l = Math.floor(Math.sqrt(k + 1)); Tlm[k] = 0.6 * gauss(rng) / l; }
+  const Tc = new Float64Array(Nc), Gc = new Float64Array(Nc * 3), Sc = new Float64Array(Nc);
+  const Tw = new Float32Array(N), Uw = new Float32Array(N * 3); // world-grid temperature and mantle flow (km/Myr)
+  function evalMantle() {
+    for (let c = 0; c < Nc; c++) { let s = 0; const o = c * NY; for (let k = 0; k < NY; k++) s += Tlm[k] * Yc[o + k]; Tc[c] = s; }
+    for (let c = 0; c < Nc; c++) { // least-squares surface gradient on the unit sphere
+      const x = cg.pos[3*c], y = cg.pos[3*c+1], z = cg.pos[3*c+2]; let gx = 0, gy = 0, gz = 0, ss = 0;
+      for (let k = cg.off[c]; k < cg.off[c + 1]; k++) { const j = cg.nbr[k], dx = cg.pos[3*j] - x, dy = cg.pos[3*j+1] - y, dz = cg.pos[3*j+2] - z, dT = Tc[j] - Tc[c]; gx += dT * dx; gy += dT * dy; gz += dT * dz; ss += dx*dx + dy*dy + dz*dz; }
+      gx *= 2 / ss; gy *= 2 / ss; gz *= 2 / ss; const gr = gx * x + gy * y + gz * z;
+      Gc[3*c] = gx - gr * x; Gc[3*c+1] = gy - gr * y; Gc[3*c+2] = gz - gr * z;
+    }
+    const U = -K_.U0 * dyn.flow;
+    for (let i = 0; i < N; i++) {
+      let t = 0, ux = 0, uy = 0, uz = 0;
+      for (let k = i * IW, e = k + IW; k < e; k++) { const c = iIdx[k], w = iW[k]; t += w * Tc[c]; ux += w * Gc[3*c]; uy += w * Gc[3*c+1]; uz += w * Gc[3*c+2]; }
+      Tw[i] = t; Uw[3*i] = U * ux; Uw[3*i+1] = U * uy; Uw[3*i+2] = U * uz;
+    }
+  }
+  const subCount = new Float32Array(N); let subDt = 1;
+  function updateMantle(h) {
+    // S_i = -alpha * Phi_i / (a_i dt) + beta * C_i, projected with weights a_i / R^2
+    Sc.fill(0);
+    const beta = K_.BETA * dyn.insul;
+    for (let i = 0; i < N; i++) {
+      const S = -K_.ALPHA * subCount[i] / subDt + (Ty[slotW[i]] === 1 ? beta : 0);
+      if (S !== 0) Sc[iIdx[i * IW]] += S * area[i];
+    }
+    for (let k = 0; k < NY; k++) {
+      let S = 0; for (let c = 0; c < Nc; c++) if (Sc[c] !== 0) S += Sc[c] * Yc[c * NY + k];
+      const l = Math.floor(Math.sqrt(k + 1)), lam = (1 + K_.EPS * l * (l + 1)) / K_.TAU_M, e = Math.exp(-lam * h);
+      Tlm[k] = Tlm[k] * e + S / lam * (1 - e);
+    }
+    subCount.fill(0);
+    evalMantle();
+  }
+
+  // ----- plate pairs: subduction polarity and time of last convergence -----
+  const pairs = new Map();
+  const pkey = (a, b) => a < b ? a * 4096 + b : b * 4096 + a;
+  function pairLower(p, sp, q, sq, time) {
+    const k = pkey(p, q); const rec = pairs.get(k);
+    if (rec && time - rec.last <= T_SLAB) { rec.last = time; return rec.lower; }
+    const a = subd(sp), b = subd(sq); let lower;
+    if (a !== b) lower = a ? p : q;                       // the subductable one goes down
+    else if (a) lower = T0[sp] < T0[sq] ? p : q;          // both: the older (denser) one
+    else lower = elevS(sp, time) <= elevS(sq, time) ? p : q; // neither (unspecified in spec): the lower-standing one
+    if (rec) { rec.lower = lower; rec.last = time; } else pairs.set(k, { lower, last: time });
+    return lower;
+  }
+
+  // ----- torque balance -----
+  let fronts = new Int32Array(1024), frontV = new Float32Array(1024), nFront = 0;
+  function solvePlates(time) {
+    const P = plates.length;
+    const Mm = new Float64Array(9 * P), bb = new Float64Array(3 * P), cells = new Int32Array(P), slabbed = new Uint8Array(P);
+    const contacts = new Map();
+    const W = plates.map(pl => pl.w);
+    const Fsp = K_.F_SP * dyn.slab, Kc = K_.K_COLL * dyn.coll;
+    nFront = 0;
+    for (let i = 0; i < N; i++) {
+      const p = owner[i], s = slotW[i];
+      const x = pos[3*i], y = pos[3*i+1], z = pos[3*i+2], rx = R * x, ry = R * y, rz = R * z;
+      let c = K_.C_OC;
+      if (Ty[s] === 1) c *= 1 + K_.C_ROOT * Math.min(1, H[s] / H0) * Math.min(1, Math.max(0, time - T0[s]) / K_.TAU_ROOT);
+      const ca = c * area[i] * R2, m = 9 * p;
+      // M_p += c a (R^2 I - r r^T)
+      Mm[m]   += ca * (R2 - rx * rx); Mm[m+1] -= ca * rx * ry; Mm[m+2] -= ca * rx * rz;
+      Mm[m+3] -= ca * ry * rx; Mm[m+4] += ca * (R2 - ry * ry); Mm[m+5] -= ca * ry * rz;
+      Mm[m+6] -= ca * rz * rx; Mm[m+7] -= ca * rz * ry; Mm[m+8] += ca * (R2 - rz * rz);
+      // b_p += c a r x u
+      const ux = Uw[3*i], uy = Uw[3*i+1], uz = Uw[3*i+2];
+      bb[3*p] += ca * (ry * uz - rz * uy); bb[3*p+1] += ca * (rz * ux - rx * uz); bb[3*p+2] += ca * (rx * uy - ry * ux);
+      cells[p]++;
+      // boundary terms
+      let nf = 0, nx = 0, ny = 0, nz = 0, frontVel = 0;
+      for (let k = off[i]; k < off[i + 1]; k++) {
+        const j = nbr[k], q = owner[j]; if (q === p) continue;
+        nf++; nx += pos[3*j] - x; ny += pos[3*j+1] - y; nz += pos[3*j+2] - z;
+        const rec = pairs.get(pkey(p, q));
+        if (!rec || time - rec.last > T_SLAB) continue;
+        const sj = slotW[j];
+        const kap = K_.C_OC * (!subd(s) && !subd(sj) ? Kc : K_.K_SUB) * lEdge * 0.5; // each edge is seen from both sides
+        const key = p < q ? p * 4096 + q : q * 4096 + p;
+        let C = contacts.get(key); if (!C) { C = new Float64Array(11); C[9] = Math.min(p, q); C[10] = Math.max(p, q); contacts.set(key, C); }
+        C[0] += kap * (R2 - rx * rx); C[1] -= kap * rx * ry; C[2] -= kap * rx * rz;
+        C[3] -= kap * ry * rx; C[4] += kap * (R2 - ry * ry); C[5] -= kap * ry * rz;
+        C[6] -= kap * rz * rx; C[7] -= kap * rz * ry; C[8] += kap * (R2 - rz * rz);
+        // arc front: upper plate cell next to an actively subducting lower plate
+        if (rec.lower === q && ST[sj] > time - T_SLAB) {
+          const wx = W[p][0] - W[q][0], wy = W[p][1] - W[q][1], wz = W[p][2] - W[q][2];
+          frontVel = Math.max(frontVel, R * Math.hypot(wy * z - wz * y, wz * x - wx * z, wx * y - wy * x));
+        }
+      }
+      if (frontVel > 0) {
+        if (nFront >= fronts.length) { const f2 = new Int32Array(fronts.length * 2); f2.set(fronts); fronts = f2; const v2 = new Float32Array(frontV.length * 2); v2.set(frontV); frontV = v2; }
+        fronts[nFront] = i; frontV[nFront++] = frontVel;
+      }
+      // slab pull on flagged boundary cells: f = F_sp min(1, sqrt(age/tau_ref)) n_hat
+      if (nf > 0 && ST[s] > time - T_SLAB) {
+        const nr = nx * x + ny * y + nz * z; nx -= nr * x; ny -= nr * y; nz -= nr * z;
+        const nl = Math.hypot(nx, ny, nz); if (nl > 0) {
+          const f = Fsp * Math.min(1, Math.sqrt(Math.max(0, SA[s]) / K_.TAU_REF)) * nf * lEdge / nl;
+          const fx = f * nx, fy = f * ny, fz = f * nz;
+          bb[3*p] += ry * fz - rz * fy; bb[3*p+1] += rz * fx - rx * fz; bb[3*p+2] += rx * fy - ry * fx;
+          slabbed[p] = 1;
+        }
+      }
+    }
+    // assemble the 3P x 3P system (Eq. "solve") and solve directly
+    const n = 3 * P, A = new Float64Array(n * n), rhs = new Float64Array(n);
+    for (let p = 0; p < P; p++) {
+      plates[p].cells = cells[p]; plates[p].slab = !!slabbed[p];
+      if (!cells[p]) { for (let a = 0; a < 3; a++) A[(3*p + a) * n + 3*p + a] = 1; continue; }
+      const m = 9 * p, eps = 1e-9 * (Mm[m] + Mm[m+4] + Mm[m+8]);
+      for (let a = 0; a < 3; a++) { for (let b = 0; b < 3; b++) A[(3*p + a) * n + 3*p + b] = Mm[m + 3*a + b]; A[(3*p + a) * n + 3*p + a] += eps; rhs[3*p + a] = bb[3*p + a]; }
+    }
+    for (const C of contacts.values()) {
+      const p = C[9], q = C[10]; if (!cells[p] || !cells[q]) continue;
+      for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) {
+        const v = C[3*a + b];
+        A[(3*p + a) * n + 3*p + b] += v; A[(3*q + a) * n + 3*q + b] += v;
+        A[(3*p + a) * n + 3*q + b] -= v; A[(3*q + a) * n + 3*p + b] -= v;
+      }
+    }
+    for (let k = 0; k < n; k++) { // Gaussian elimination, partial pivoting
+      let piv = k, best = Math.abs(A[k * n + k]);
+      for (let r = k + 1; r < n; r++) { const v = Math.abs(A[r * n + k]); if (v > best) { best = v; piv = r; } }
+      if (piv !== k) { for (let c = 0; c < n; c++) { const t = A[k * n + c]; A[k * n + c] = A[piv * n + c]; A[piv * n + c] = t; } const t = rhs[k]; rhs[k] = rhs[piv]; rhs[piv] = t; }
+      const d = A[k * n + k]; if (d === 0) continue;
+      for (let r = k + 1; r < n; r++) { const f = A[r * n + k] / d; if (f === 0) continue; for (let c = k; c < n; c++) A[r * n + c] -= f * A[k * n + c]; rhs[r] -= f * rhs[k]; }
+    }
+    for (let k = n - 1; k >= 0; k--) { let s = rhs[k]; for (let c = k + 1; c < n; c++) s -= A[k * n + c] * rhs[c]; rhs[k] = A[k * n + k] ? s / A[k * n + k] : 0; }
+    for (let p = 0; p < P; p++) plates[p].w = [rhs[3*p], rhs[3*p+1], rhs[3*p+2]];
+  }
+
+  // ----- volcanic arcs: dh/dt = A v_conv g(delta), g a bump at D_ARC, by BFS from the front -----
+  const visit = new Int32Array(N); let stamp = 0; const dH = new Float32Array(N);
+  let bq = new Int32Array(1024), bk = new Int32Array(1024), bv = new Float32Array(1024);
+  const KH = Math.max(0, Math.ceil(2 * K_.D_ARC / sKm)), gArc = new Float64Array(KH + 1);
+  { let ws = 0; for (let k = 0; k <= KH; k++) { gArc[k] = Math.exp(-(((k * sKm - K_.D_ARC) / (0.5 * K_.D_ARC)) ** 2)); ws += gArc[k]; } for (let k = 0; k <= KH; k++) gArc[k] /= ws * sKm; }
+  function arcs(h) {
+    stamp++; let head = 0, tail = 0;
+    const need = nFront * 8 + N; if (bq.length < need) { bq = new Int32Array(need); bk = new Int32Array(need); bv = new Float32Array(need); }
+    for (let f = 0; f < nFront; f++) { const i = fronts[f]; if (visit[i] === stamp) continue; visit[i] = stamp; bq[tail] = i; bk[tail] = 0; bv[tail++] = frontV[f]; }
+    while (head < tail) {
+      const i = bq[head], k = bk[head], v = bv[head++], s = slotW[i], p = owner[i];
+      const dh = K_.A_ARC * v * gArc[k] * h;
+      H[s] += dh; D[s] = Math.min(1, D[s] + dh / H_OC);
+      if (k >= KH) continue;
+      for (let e = off[i]; e < off[i + 1]; e++) { const j = nbr[e]; if (visit[j] === stamp || owner[j] !== p) continue; visit[j] = stamp; bq[tail] = j; bk[tail] = k + 1; bv[tail++] = v; }
+    }
+  }
+
+  // ----- compositing: world -> plate lookups, gaps, overlaps -----
+  const M = new Float64Array(9 * 64);
+  const newOwner = new Int16Array(N), newRef = new Int32Array(N), newSlot = new Int32Array(N);
+  const cand = new Int32Array(16), candR = new Int32Array(16), hitP = new Int32Array(16), hitR = new Int32Array(16), hitS = new Int32Array(16);
+  let gaps = new Int32Array(1024), events = [];
+  const mark = new Int32Array(N); let mstamp = 0;
+  const sim = { grid, prm, N, time: 0, owner, ref, slotW, plates, Tw, Uw, lastSub: 0, healed: 0, hotspots: [] };
+  function lookup(p, x, y, z) { const m = 9 * p; return locate(M[m]*x + M[m+3]*y + M[m+6]*z, M[m+1]*x + M[m+4]*y + M[m+7]*z, M[m+2]*x + M[m+5]*y + M[m+8]*z); }
+  function composite(time) {
+    let nGap = 0; events.length = 0;
     for (let i = 0; i < N; i++) {
       const x = pos[3*i], y = pos[3*i+1], z = pos[3*i+2];
-      let nc = 0; cand[nc++] = own[i];
+      let nc = 0; cand[nc++] = owner[i];
       for (let k = off[i]; k < off[i + 1]; k++) {
-        const o = own[nbr[k]]; let seen = false;
+        const o = owner[nbr[k]]; let seen = false;
         for (let c = 0; c < nc; c++) if (cand[c] === o) { seen = true; break; }
         if (!seen) cand[nc++] = o;
       }
       let hits = 0;
       for (let c = 0; c < nc; c++) {
-        const p = cand[c], m = 9 * p;
-        const r = locate(M[m]*x + M[m+3]*y + M[m+6]*z, M[m+1]*x + M[m+4]*y + M[m+7]*z, M[m+2]*x + M[m+5]*y + M[m+8]*z);
+        const p = cand[c], r = lookup(p, x, y, z), s = plates[p].idx[r];
         candR[c] = r;
-        if (layerT[p * N + r] > 0) { hitP[hits] = p; hitR[hits] = r; hits++; }
+        if (s >= 0) { hitP[hits] = p; hitR[hits] = r; hitS[hits++] = s; }
       }
-      if (hits === 1) { newOwner[i] = hitP[0]; newRef[i] = hitR[0]; continue; }
+      if (hits === 1) { newOwner[i] = hitP[0]; newRef[i] = hitR[0]; newSlot[i] = hitS[0]; continue; }
       if (hits === 0) {
-        // gap: either a lattice-aliasing pinhole inside the old plate (heal it) or a divergent margin (new seafloor)
-        const p = cand[0], r = candR[0], base = p * N; let filled = 0, src = -1;
-        for (let k = off[r]; k < off[r + 1]; k++) if (layerT[base + nbr[k]] > 0) { filled++; src = nbr[k]; }
-        if (filled >= 4) { layerT[base + r] = layerT[base + src]; layerB[base + r] = layerB[base + src]; }
-        else { layerT[base + r] = T_OCEAN; layerB[base + r] = time; }
-        newOwner[i] = p; newRef[i] = r; continue;
+        // Pinhole check: the spec claims world->plate lookup cannot alias, but crust created at a ridge only
+        // occupies the plate cells that were sampled then; later samples can land between them.
+        const p = cand[0], r = candR[0], idx = plates[p].idx; let filled = 0, src = -1;
+        for (let k = off[r]; k < off[r + 1]; k++) { const t = idx[nbr[k]]; if (t >= 0) { filled++; src = t; } }
+        if (filled >= 4 && idx[r] === -1) { // never-occupied pinhole (-2 marks consumed crust)
+          const s = alloc(); Ty[s] = Ty[src]; H[s] = H[src]; T0[s] = T0[src]; D[s] = D[src]; SA[s] = SA[src]; ST[s] = ST[src];
+          idx[r] = s; newOwner[i] = p; newRef[i] = r; newSlot[i] = s; sim.healed++; continue;
+        }
+        if (nGap >= gaps.length) { const g2 = new Int32Array(gaps.length * 2); g2.set(gaps); gaps = g2; }
+        gaps[nGap++] = i; newOwner[i] = -1; continue;
       }
-      // overlap: the most buoyant (highest-standing) crust stays on top
-      let win = 0, best = -Infinity;
+      // overlap: pick the upper plate pairwise, using recorded polarity where it exists
+      let up = 0;
+      for (let k = 1; k < hits; k++) if (pairLower(hitP[up], hitS[up], hitP[k], hitS[k], time) === hitP[up]) up = k;
+      const p = hitP[up], su = hitS[up];
       for (let k = 0; k < hits; k++) {
-        const idx = hitP[k] * N + hitR[k];
-        const e = elevation(layerT[idx], time - layerB[idx]);
-        if (e > best) { best = e; win = k; }
+        if (k === up) continue;
+        const q = hitP[k], sl = hitS[k];
+        pairLower(p, su, q, sl, time);
+        if (subd(sl)) { subCount[i] += 1; events.push(i, q, time - T0[sl]); }
+        else { // accretion or collision: conserve volume onto the upper cell
+          H[su] += H[sl]; D[su] = Math.min(1, D[su] + K_.D_COLL);
+          if (Ty[su] === 0 && H[su] > H_CRIT) Ty[su] = 1;
+        }
+        plates[q].idx[hitR[k]] = -2; release(sl); // tombstone: consumed crust must not be healed back
       }
-      const wIdx = hitP[win] * N + hitR[win];
-      for (let k = 0; k < hits; k++) {
-        if (k === win) continue;
-        const lIdx = hitP[k] * N + hitR[k], TL = layerT[lIdx];
-        layerT[wIdx] += TL > T_CONT ? TL : F_ARC * TL; // continents stack; oceanic slabs feed arcs
-        layerT[lIdx] = 0;
-      }
-      newOwner[i] = hitP[win]; newRef[i] = hitR[win];
+      newOwner[i] = p; newRef[i] = hitR[up]; newSlot[i] = su;
     }
-    sim.owner.set(newOwner); sim.ref.set(newRef);
+    // gaps: multi-source breadth-first flood from the gap edges, new oceanic crust at t0 = t
+    let frontier = [];
+    for (let g = 0; g < nGap; g++) { const i = gaps[g]; for (let k = off[i]; k < off[i + 1]; k++) if (newOwner[nbr[k]] >= 0) { frontier.push(i); break; } }
+    mstamp++;
+    while (frontier.length) {
+      const choice = frontier.map(i => { for (let k = off[i]; k < off[i + 1]; k++) { const o = newOwner[nbr[k]]; if (o >= 0) return o; } return -1; });
+      const next = [];
+      frontier.forEach((i, n) => {
+        const p = choice[n]; if (p < 0 || newOwner[i] >= 0) return;
+        const x = pos[3*i], y = pos[3*i+1], z = pos[3*i+2], r = lookup(p, x, y, z);
+        let s = plates[p].idx[r];
+        if (s < 0) { s = alloc(); Ty[s] = 0; H[s] = H_OC; T0[s] = time; D[s] = 0; SA[s] = 0; ST[s] = -1e9; plates[p].idx[r] = s; }
+        newOwner[i] = p; newRef[i] = r; newSlot[i] = s;
+        for (let k = off[i]; k < off[i + 1]; k++) { const j = nbr[k]; if (newOwner[j] < 0 && mark[j] !== mstamp) { mark[j] = mstamp; next.push(j); } }
+      });
+      frontier = next;
+    }
+    owner.set(newOwner); ref.set(newRef); slotW.set(newSlot);
+    // slab flags on the lower plate's cells next to each subduction event
+    for (let e = 0; e < events.length; e += 3) {
+      const i = events[e], q = events[e + 1], age = events[e + 2];
+      for (let k = off[i]; k < off[i + 1]; k++) { const j = nbr[k]; if (owner[j] === q) { const s = slotW[j]; SA[s] = age; ST[s] = time; } }
+    }
+  }
 
-    // relax thick continental crust laterally (volume-conserving diffusion among continental cells)
-    const sKm = grid.spacing * R, c = Math.min(KAPPA * h / (sKm * sKm), 0.16);
-    for (let i = 0; i < N; i++) Tw[i] = layerT[own[i] * N + rf[i]];
+  // ----- within-plate relaxations and hotspots -----
+  function relax(h, time) {
+    const ee = Math.exp(-h / K_.TAU_E), eh = Math.exp(-h / K_.TAU_H);
+    // Erosion. Spec: h -> h0 + (h - h0) e^{-dt/tau_e} for h > h0, a pure volume sink. Deviation: the eroded
+    // thickness is shed to lower same-plate neighbours (sediment), so crust volume is conserved and long-run
+    // continental area tends to volume / h0. Thickened oceanic crust relaxes toward h_oc the same way.
+    // Oceanic recipients pushed past h_crit become continental, as for merged crust in the spec.
+    dH.fill(0);
     for (let i = 0; i < N; i++) {
-      const Ti = Tw[i]; Tn[i] = Ti; if (Ti <= T_CONT) continue;
-      let acc = 0;
-      for (let k = off[i]; k < off[i + 1]; k++) { const Tj = Tw[nbr[k]]; if (Tj > T_CONT) acc += Tj - Ti; }
-      Tn[i] = Ti + c * acc;
+      const s = slotW[i], ref = Ty[s] === 1 ? H0 : H_OC; if (H[s] <= ref) continue;
+      const loss = (H[s] - ref) * (1 - ee), hNew = H[s] - loss;
+      let m = 0; for (let k = off[i]; k < off[i + 1]; k++) { const j = nbr[k]; if (owner[j] === owner[i] && H[slotW[j]] < hNew) m++; }
+      dH[i] -= loss;
+      if (m) { const g = loss / m; for (let k = off[i]; k < off[i + 1]; k++) { const j = nbr[k]; if (owner[j] === owner[i] && H[slotW[j]] < hNew) dH[j] += g; } }
     }
-    for (let i = 0; i < N; i++) if (Tw[i] > T_CONT) layerT[own[i] * N + rf[i]] = Tn[i];
+    for (let i = 0; i < N; i++) if (dH[i] !== 0) { const s = slotW[i]; H[s] += dH[i]; if (dH[i] > 0 && Ty[s] === 0 && H[s] > H_CRIT) Ty[s] = 1; }
+    for (let i = 0; i < N; i++) { // spread thickness above H_MAX to same-plate neighbours
+      const s = slotW[i]; if (H[s] <= H_MAX) continue;
+      let m = 0; for (let k = off[i]; k < off[i + 1]; k++) if (owner[nbr[k]] === owner[i]) m++;
+      if (!m) continue;
+      const ex = (H[s] - H_MAX) / m; H[s] = H_MAX;
+      for (let k = off[i]; k < off[i + 1]; k++) { const j = nbr[k]; if (owner[j] === owner[i]) H[slotW[j]] += ex; }
+    }
+    for (let s = 0; s < top; s++) if (Ty[s] >= 0) D[s] *= eh;
+    // hotspots: Poisson births with rate density proportional to max(T, 0); fixed in the world frame
+    let wsum = 0; for (let c = 0; c < Nc; c++) wsum += Math.max(0, Tc[c]) * cg.area[c];
+    const expected = K_.HS_BIRTH * wsum / (4 * Math.PI) * h;
+    let births = 0, L = Math.exp(-expected), pp = rng(); while (pp > L) { births++; pp *= rng(); }
+    for (let b = 0; b < births; b++) {
+      let u = rng() * wsum, c = 0; for (; c < Nc - 1; c++) { u -= Math.max(0, Tc[c]) * cg.area[c]; if (u <= 0) break; }
+      sim.hotspots.push({ i: grid.locate(cg.pos[3*c], cg.pos[3*c+1], cg.pos[3*c+2]), expiry: time + K_.TAU_HS });
+    }
+    sim.hotspots = sim.hotspots.filter(hs => hs.expiry > time);
+    for (const hs of sim.hotspots) { const s = slotW[hs.i]; H[s] += K_.HS_RATE * h; D[s] = Math.min(1, D[s] + 0.02 * h); }
+  }
+
+  function substep(h) {
+    const time = sim.time + h;
+    updateMantle(h);                 // 1. mantle coefficients (exact exponential update)
+    solvePlates(sim.time);           // 2. forces and angular velocities
+    arcs(h);                         //    arc growth uses this step's convergence speeds
+    if (M.length < 9 * plates.length) throw new Error('too many plates');
+    for (let p = 0; p < plates.length; p++) { // 3. exact rotation
+      const pl = plates[p], w = pl.w, wl = Math.hypot(w[0], w[1], w[2]);
+      if (wl > 0) pl.q = qnorm(qmul(qaxis([w[0] / wl, w[1] / wl, w[2] / wl], wl * h), pl.q));
+      qmat(pl.q, M, 9 * p);
+    }
+    composite(time);                 // 4. gaps and overlaps
+    subDt = h;
+    relax(h, time);                  // 5. erosion, damage healing, hotspot stamping
     sim.time = time;
   }
 
+  evalMantle();
+  solvePlates(0);
   sim.step = function (dt) {
-    let wmax = 0; for (let p = 0; p < P; p++) wmax = Math.max(wmax, omega[p]);
-    const sub = Math.max(1, Math.ceil(wmax * dt / (0.6 * grid.spacing))); // keep motion under ~0.6 cell per substep
+    let wmax = 0; for (const pl of plates) wmax = Math.max(wmax, Math.hypot(...pl.w));
+    const sub = Math.min(200, Math.max(1, Math.ceil(wmax * dt / (0.6 * grid.spacing)))); // under ~0.6 cell per substep
+    sim.healed = 0;
     for (let s = 0; s < sub; s++) substep(dt / sub);
     sim.lastSub = sub;
     return sub;
   };
-  // per-cell world-frame fields for display
-  sim.fields = function (T, age, h) {
+  // world-frame display fields; sea level from a fixed ocean volume
+  sim.fields = function (out) {
+    const t = sim.time;
     for (let i = 0; i < N; i++) {
-      const idx = sim.owner[i] * N + sim.ref[i];
-      T[i] = layerT[idx]; age[i] = sim.time - layerB[idx]; h[i] = elevation(T[i], age[i]);
+      const s = slotW[i];
+      out.E[i] = elevS(s, t); out.H[i] = H[s]; out.age[i] = t - T0[s]; out.type[i] = Ty[s]; out.D[i] = D[s];
     }
+    const target = dyn.ocean * 4 * Math.PI; let lo = -15, hi = 15;
+    for (let it = 0; it < 40; it++) {
+      const z = 0.5 * (lo + hi); let v = 0;
+      for (let i = 0; i < N; i++) { const d = z - out.E[i]; if (d > 0) v += d * area[i]; }
+      if (v > target) hi = z; else lo = z;
+    }
+    out.sea = 0.5 * (lo + hi);
   };
+  sim.mantleT = Tw;
   return sim;
 }
 
@@ -476,8 +809,10 @@ const ramp = stops => stops.map(([v, c]) => [v, hex(c)]);
 const CM = {
   ocean: ramp([[-7, '#08142e'], [-5, '#0f2d5c'], [-3.2, '#1a5a93'], [-1.5, '#3b8fbf'], [-0.3, '#6fc0d4'], [0, '#93d6d8']]),
   land:  ramp([[0, '#3f7a3a'], [0.4, '#6b9748'], [1.2, '#a8a463'], [2.4, '#9b7448'], [3.8, '#7b5a45'], [5.5, '#efece6']]),
-  age:   ramp([[0, '#d7301f'], [20, '#f0703c'], [45, '#f7c56a'], [80, '#9dcc6a'], [120, '#3a8fbf'], [180, '#3c2b78']]),
+  age:   ramp([[0, '#d7301f'], [15, '#f0703c'], [35, '#f7c56a'], [60, '#9dcc6a'], [100, '#3a8fbf'], [180, '#3c2b78']]),
   thick: ramp([[0, '#14182a'], [7, '#24466c'], [15, '#3f7d8a'], [25, '#7fae7a'], [35, '#d8c57a'], [50, '#e2803d'], [70, '#f4efe4']]),
+  mantle: ramp([[-1, '#2b4c9b'], [-0.5, '#5f86c4'], [0, '#e9e4dc'], [0.5, '#e2894f'], [1, '#a8262a']]),
+  damage: ramp([[0, '#1c2230'], [0.25, '#4b3d6e'], [0.5, '#a3487a'], [0.75, '#ec7d4f'], [1, '#fbe27a']]),
 };
 function sample(map, v, out, o) {
   if (v <= map[0][0]) { const c = map[0][1]; out[o] = c[0]; out[o+1] = c[1]; out[o+2] = c[2]; return; }
@@ -493,15 +828,26 @@ function hsl(h, s, l) { const a = s * Math.min(l, 1 - l), f = n => { const k = (
 const canvas = document.getElementById('gl');
 const gl = canvas.getContext('webgl2', { antialias: true, alpha: true, premultipliedAlpha: true });
 const TEXW = 1024;
-let prog, vao, nIndex = 0, texColor, texNormal, texH = 1, colorBuf, normalBuf;
+let prog, lineProg, vao, nIndex = 0, texColor, texNormal, texH = 1, colorBuf, normalBuf;
+let lineVao, lineBuf, lineCount = 0;
 
+function shader(type, src) { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
+function program(vs, fs, attribs, uniforms) {
+  const p = gl.createProgram();
+  gl.attachShader(p, shader(gl.VERTEX_SHADER, vs)); gl.attachShader(p, shader(gl.FRAGMENT_SHADER, fs));
+  attribs.forEach((a, k) => gl.bindAttribLocation(p, k, a));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  p.u = {}; for (const n of uniforms) p.u[n] = gl.getUniformLocation(p, n);
+  return p;
+}
 function compile() {
-  const vs = `#version 300 es
+  prog = program(`#version 300 es
   in vec3 aPos; in uint aCell;
   uniform mat4 uMVP, uMV;
   flat out uint vCell; out vec3 vSph; out vec3 vView;
-  void main(){ vCell=aCell; vSph=aPos; vView=(uMV*vec4(aPos,1.0)).xyz; gl_Position=uMVP*vec4(aPos,1.0); }`;
-  const fs = `#version 300 es
+  void main(){ vCell=aCell; vSph=aPos; vView=(uMV*vec4(aPos,1.0)).xyz; gl_Position=uMVP*vec4(aPos,1.0); }`,
+  `#version 300 es
   precision highp float;
   uniform sampler2D uColor, uNormal; uniform mat3 uRot;
   flat in uint vCell; in vec3 vSph; in vec3 vView; out vec4 o;
@@ -514,30 +860,29 @@ function compile() {
     vec3 V=normalize(-vView);
     float diff=max(dot(n,L),0.0);
     float rim=pow(1.0-max(dot(s,V),0.0),3.0);
-    vec3 c=col*(0.2+0.85*diff)+vec3(0.30,0.52,0.95)*rim*0.5;
-    o=vec4(c,1.0);
-  }`;
-  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
-  prog = gl.createProgram();
-  gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs));
-  gl.bindAttribLocation(prog, 0, 'aPos'); gl.bindAttribLocation(prog, 1, 'aCell');
-  gl.linkProgram(prog);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
-  prog.u = {}; for (const n of ['uMVP', 'uMV', 'uRot', 'uColor', 'uNormal']) prog.u[n] = gl.getUniformLocation(prog, n);
+    o=vec4(col*(0.2+0.85*diff)+vec3(0.30,0.52,0.95)*rim*0.5,1.0);
+  }`, ['aPos', 'aCell'], ['uMVP', 'uMV', 'uRot', 'uColor', 'uNormal']);
+  lineProg = program(`#version 300 es
+  in vec3 aPos; in float aA; uniform mat4 uMVP; out float vA;
+  void main(){ vA=aA; gl_Position=uMVP*vec4(aPos,1.0); }`,
+  `#version 300 es
+  precision highp float; in float vA; uniform vec3 uCol; out vec4 o;
+  void main(){ o=vec4(uCol*vA, vA); }`, ['aPos', 'aA'], ['uMVP', 'uCol']);
+  lineVao = gl.createVertexArray(); gl.bindVertexArray(lineVao);
+  lineBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, lineBuf);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 16, 0);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 16, 12);
+  gl.bindVertexArray(null);
 }
 // Each cell is drawn as a fan around its centre whose corners are the centroids of its incident triangles.
 function buildMesh(grid) {
-  const { N, pos, off, ring, tris } = grid;
+  const { N, pos, off, ring, cen } = grid;
   const nVert = N + off[N], P = new Float32Array(nVert * 3), C = new Uint32Array(nVert), I = new Uint32Array(off[N] * 3);
   let vi = 0, ii = 0;
   for (let v = 0; v < N; v++) {
     const c0 = vi; P[3*vi] = pos[3*v]; P[3*vi+1] = pos[3*v+1]; P[3*vi+2] = pos[3*v+2]; C[vi++] = v;
     const d = off[v + 1] - off[v];
-    for (let k = 0; k < d; k++) {
-      const t = ring[off[v] + k], a = tris[3*t], b = tris[3*t+1], c = tris[3*t+2];
-      let x = pos[3*a] + pos[3*b] + pos[3*c], y = pos[3*a+1] + pos[3*b+1] + pos[3*c+1], z = pos[3*a+2] + pos[3*b+2] + pos[3*c+2];
-      const l = Math.hypot(x, y, z); P[3*vi] = x/l; P[3*vi+1] = y/l; P[3*vi+2] = z/l; C[vi++] = v;
-    }
+    for (let k = 0; k < d; k++) { const t = ring[off[v] + k]; P[3*vi] = cen[3*t]; P[3*vi+1] = cen[3*t+1]; P[3*vi+2] = cen[3*t+2]; C[vi++] = v; }
     for (let k = 0; k < d; k++) { I[ii++] = c0; I[ii++] = c0 + 1 + k; I[ii++] = c0 + 1 + (k + 1) % d; }
   }
   if (vao) gl.deleteVertexArray(vao);
@@ -558,7 +903,6 @@ function buildMesh(grid) {
   if (texColor) { gl.deleteTexture(texColor); gl.deleteTexture(texNormal); }
   texColor = mk(); texNormal = mk();
 }
-
 // ---------- camera ----------
 const cam = { q: qnorm(qmul(qaxis([1, 0, 0], 0.35), qaxis([0, 1, 0], -0.4))), dist: 4.3, spin: [0, 0], fov: 32 * Math.PI / 180 };
 function cssSize() { return [canvas.clientWidth || 1, canvas.clientHeight || 1]; }
@@ -570,6 +914,8 @@ function rotateView(dx, dy) {
 }
 function zoom(factor) { cam.dist = Math.min(10, Math.max(1.15, cam.dist * factor)); }
 
+
+
 function draw() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2), [cw, ch] = cssSize();
   const W = Math.round(cw * dpr), H = Math.round(ch * dpr);
@@ -579,24 +925,30 @@ function draw() {
   if (!nIndex) return;
   const Rm = qmat(cam.q, new Float64Array(9));
   const fy = 1 / Math.tan(effFovY() / 2), asp = W / H, near = 0.05, far = 20;
-  // column-major MV = translate(0,0,-dist) * R
   const MV = new Float32Array([Rm[0], Rm[3], Rm[6], 0, Rm[1], Rm[4], Rm[7], 0, Rm[2], Rm[5], Rm[8], 0, 0, 0, -cam.dist, 1]);
   const Pm = [fy / asp, 0, 0, 0, 0, fy, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, 2 * far * near / (near - far), 0];
   const MVP = new Float32Array(16);
   for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) { let s = 0; for (let k = 0; k < 4; k++) s += Pm[k * 4 + r] * MV[c * 4 + k]; MVP[c * 4 + r] = s; }
-  gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
+  gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.disable(gl.BLEND); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
   gl.useProgram(prog);
   gl.uniformMatrix4fv(prog.u.uMVP, false, MVP); gl.uniformMatrix4fv(prog.u.uMV, false, MV);
   gl.uniformMatrix3fv(prog.u.uRot, false, new Float32Array([Rm[0], Rm[3], Rm[6], Rm[1], Rm[4], Rm[7], Rm[2], Rm[5], Rm[8]]));
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texColor); gl.uniform1i(prog.u.uColor, 0);
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, texNormal); gl.uniform1i(prog.u.uNormal, 1);
-  gl.bindVertexArray(vao); gl.drawElements(gl.TRIANGLES, nIndex, gl.UNSIGNED_INT, 0); gl.bindVertexArray(null);
+  gl.bindVertexArray(vao); gl.drawElements(gl.TRIANGLES, nIndex, gl.UNSIGNED_INT, 0);
+  if (ui.arrows && lineCount) {
+    gl.useProgram(lineProg); gl.uniformMatrix4fv(lineProg.u.uMVP, false, MVP); gl.uniform3f(lineProg.u.uCol, 1, 0.97, 0.9);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
+    gl.bindVertexArray(lineVao); gl.drawArrays(gl.LINES, 0, lineCount);
+  }
+  gl.bindVertexArray(null);
 }
 
 // ---------- app state ----------
 const $ = id => document.getElementById(id);
-const ui = { view: 'elev', bounds: false, playing: true, dt: 2 };
-let grid = null, sim = null, fT, fAge, fH, stepMs = 0, dirty = true;
+const ui = { view: 'elev', bounds: false, arrows: true, hotspots: true, playing: true, dt: 2 };
+const dyn = { slab: 1, flow: 1, insul: 1, coll: 1, ocean: 2.6 };
+let grid = null, sim = null, F = null, stepMs = 0, dirty = true, arrowGrid = null;
 function readWorldParams() { return { f: +$('res').value, contFrac: +$('cont').value, plates: +$('plates').value, radius: +$('radius').value, seed: Math.floor(+$('seed').value) || 1 }; }
 let applied = null;
 
@@ -604,8 +956,10 @@ function resetWorld() {
   const prm = readWorldParams();
   grid = buildGrid(prm.f);
   if (!applied || applied.f !== prm.f) buildMesh(grid);
-  sim = createSim(grid, prm);
-  fT = new Float32Array(grid.N); fAge = new Float32Array(grid.N); fH = new Float32Array(grid.N);
+  sim = createSim(grid, prm, dyn);
+  const N = grid.N;
+  F = { E: new Float32Array(N), H: new Float32Array(N), age: new Float32Array(N), type: new Int8Array(N), D: new Float32Array(N), sea: 0 };
+  arrowGrid = buildGrid(10);
   applied = prm; dirty = true; stepMs = 0;
   markPending();
 }
@@ -615,26 +969,49 @@ function markPending() {
   $('reset').textContent = pend ? 'Reset to apply' : 'Reset';
 }
 
+function buildArrows() {
+  const R = applied.radius, scale = 0.12 * R / 100; // 100 km/Myr draws as a 0.12 rad arrow
+  const ag = arrowGrid, out = new Float32Array(ag.N * 6 * 4); let n = 0;
+  const put = (x, y, z, a) => { const l = Math.hypot(x, y, z) / 1.004; out[n++] = x / l; out[n++] = y / l; out[n++] = z / l; out[n++] = a; };
+  for (let c = 0; c < ag.N; c++) {
+    const x = ag.pos[3*c], y = ag.pos[3*c+1], z = ag.pos[3*c+2], i = grid.locate(x, y, z);
+    const w = sim.plates[sim.owner[i]].w;
+    const vx = (w[1] * z - w[2] * y) * scale, vy = (w[2] * x - w[0] * z) * scale, vz = (w[0] * y - w[1] * x) * scale;
+    const len = Math.hypot(vx, vy, vz); if (len < 1e-4) continue;
+    const hx = x + vx, hy = y + vy, hz = z + vz;
+    const dx = vx / len, dy = vy / len, dz = vz / len, sx = y * dz - z * dy, sy = z * dx - x * dz, sz = x * dy - y * dx, b = Math.min(0.35 * len, 0.025);
+    put(x, y, z, 0.15); put(hx, hy, hz, 0.95);
+    put(hx, hy, hz, 0.95); put(hx - b * (dx + 0.55 * sx), hy - b * (dy + 0.55 * sy), hz - b * (dz + 0.55 * sz), 0.95);
+    put(hx, hy, hz, 0.95); put(hx - b * (dx - 0.55 * sx), hy - b * (dy - 0.55 * sy), hz - b * (dz - 0.55 * sz), 0.95);
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, lineBuf); gl.bufferData(gl.ARRAY_BUFFER, out.subarray(0, n), gl.DYNAMIC_DRAW);
+  lineCount = n / 4;
+}
+
 function updateTextures() {
-  const { N, pos, off, nbr } = grid, R = applied.radius;
-  sim.fields(fT, fAge, fH);
-  const own = sim.owner;
-  let cont = 0, land = 0; const alive = new Set();
-  const col = [0, 0, 0];
+  const { N, pos, off, nbr, area } = grid, R = applied.radius, A4 = 4 * Math.PI;
+  sim.fields(F);
+  const own = sim.owner, Tm = sim.mantleT, sea = F.sea;
+  let tRms = 0; for (let i = 0; i < N; i++) tRms += Tm[i] * Tm[i] * area[i]; tRms = Math.sqrt(tRms / (4 * Math.PI)) || 1;
+  let cont = 0, land = 0;
   for (let i = 0; i < N; i++) {
-    const o = 4 * i, T = fT[i], h = fH[i];
-    if (T > T_CONT) cont++; if (h > 0) land++; alive.add(own[i]);
+    const o = 4 * i, h = F.E[i] - sea, cc = F.type[i] === 1;
+    if (cc) cont += area[i]; if (h > 0) land += area[i];
     switch (ui.view) {
       case 'elev': sample(h < 0 ? CM.ocean : CM.land, h, colorBuf, o); break;
-      case 'age': if (T > T_CONT) { colorBuf[o] = 128; colorBuf[o+1] = 124; colorBuf[o+2] = 116; } else sample(CM.age, fAge[i], colorBuf, o); break;
-      case 'thick': sample(CM.thick, T, colorBuf, o); break;
-      case 'plates': { const c = hsl((own[i] * 0.6180339) % 1, T > T_CONT ? 0.55 : 0.42, T > T_CONT ? 0.62 : 0.34); colorBuf[o] = c[0]; colorBuf[o+1] = c[1]; colorBuf[o+2] = c[2]; break; }
+      case 'age': if (cc) { colorBuf[o] = 128; colorBuf[o+1] = 124; colorBuf[o+2] = 116; } else sample(CM.age, F.age[i], colorBuf, o); break;
+      case 'thick': sample(CM.thick, F.H[i], colorBuf, o); break;
+      case 'mantle': sample(CM.mantle, Tm[i] / (2 * tRms), colorBuf, o); if (cc) { colorBuf[o] *= 0.8; colorBuf[o+1] *= 0.8; colorBuf[o+2] *= 0.8; } break;
+      case 'damage': sample(CM.damage, F.D[i], colorBuf, o); break;
+      case 'plates': { const c = hsl((own[i] * 0.6180339) % 1, cc ? 0.55 : 0.42, cc ? 0.62 : 0.34); colorBuf[o] = c[0]; colorBuf[o+1] = c[1]; colorBuf[o+2] = c[2]; break; }
     }
-    // relief normal from the elevation gradient (least squares over the neighbour ring)
+    // relief normal from the elevation gradient (least squares over the neighbour ring); water is flat in elevation view
     const x = pos[3*i], y = pos[3*i+1], z = pos[3*i+2];
     let gx = 0, gy = 0, gz = 0, ss = 0, edge = false;
+    const flat = ui.view === 'elev' && h < 0, hi = flat ? 0 : F.E[i];
     for (let k = off[i]; k < off[i + 1]; k++) {
-      const j = nbr[k], dx = pos[3*j] - x, dy = pos[3*j+1] - y, dz = pos[3*j+2] - z, dh = fH[j] - h;
+      const j = nbr[k], dx = pos[3*j] - x, dy = pos[3*j+1] - y, dz = pos[3*j+2] - z;
+      const dh = flat ? 0 : (ui.view === 'elev' ? Math.max(F.E[j], sea) : F.E[j]) - hi;
       gx += dh * dx; gy += dh * dy; gz += dh * dz; ss += dx*dx + dy*dy + dz*dz;
       if (own[j] !== own[i]) edge = true;
     }
@@ -646,23 +1023,42 @@ function updateTextures() {
     if (ui.bounds && edge) { colorBuf[o] = 255; colorBuf[o+1] = 236; colorBuf[o+2] = 214; }
     colorBuf[o+3] = 255;
   }
+  if (ui.hotspots) for (const hs of sim.hotspots) { const o = 4 * hs.i; colorBuf[o] = 255; colorBuf[o+1] = 60; colorBuf[o+2] = 200; }
   gl.bindTexture(gl.TEXTURE_2D, texColor); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, TEXW, texH, gl.RGBA, gl.UNSIGNED_BYTE, colorBuf);
   gl.bindTexture(gl.TEXTURE_2D, texNormal); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, TEXW, texH, gl.RGBA, gl.UNSIGNED_BYTE, normalBuf);
+  if (ui.arrows) buildArrows();
+
+  // stats
   const nf = new Intl.NumberFormat('en-US');
+  let alive = 0, slab = 0, vs = 0, vmax = 0;
+  for (const pl of sim.plates) if (pl.cells) { alive++; if (pl.slab) slab++; }
+  for (let i = 0; i < N; i++) { // area-weighted mean surface speed |w x r|
+    const w = sim.plates[own[i]].w, x = pos[3*i], y = pos[3*i+1], z = pos[3*i+2];
+    const v = R * Math.hypot(w[1] * z - w[2] * y, w[2] * x - w[0] * z, w[0] * y - w[1] * x);
+    vs += v * area[i]; if (v > vmax) vmax = v;
+  }
+  const wa = A4;
   $('sCells').textContent = nf.format(N);
   $('sSpacing').textContent = `${Math.round(grid.spacing * R)} km`;
-  $('sPlates').textContent = `${alive.size} of ${sim.P}`;
-  $('sCont').textContent = `${(100 * cont / N).toFixed(1)} %`;
-  $('sLand').textContent = `${(100 * land / N).toFixed(1)} %`;
+  $('sPlates').textContent = `${alive} of ${sim.plates.length}`;
+  $('sSpeed').textContent = `${(vs / wa).toFixed(0)} / ${vmax.toFixed(0)} km/Myr`;
+  $('sSlab').textContent = `${slab}`;
+  $('sCont').textContent = `${(100 * cont / A4).toFixed(1)} %`;
+  $('sLand').textContent = `${(100 * land / A4).toFixed(1)} %`;
+  $('sSea').textContent = `${sea >= 0 ? '+' : '−'}${Math.abs(sea).toFixed(2)} km`;
+  $('sHot').textContent = sim.hotspots.length;
+  $('sHeal').textContent = sim.lastSub ? nf.format(sim.healed) : '–';
   $('sSub').textContent = sim.lastSub || '–';
   $('sMs').textContent = stepMs ? `${stepMs.toFixed(0)} ms` : '–';
   const tt = sim.time.toFixed(1); $('clock').textContent = tt; $('hudTime').textContent = tt;
 }
 
 const LEGENDS = {
-  elev: { css: () => grad([...CM.ocean.map(([v, c]) => [v, c]), ...CM.land.map(([v, c]) => [v, c])], -7, 5.5), ticks: ['−7 km', '0', '+5.5 km'] },
+  elev: { css: () => grad([...CM.ocean, ...CM.land], -7, 5.5), ticks: ['−7 km', 'sea level', '+5.5 km'] },
   age: { css: () => grad(CM.age, 0, 180), ticks: ['0 Myr', '90', '180+ Myr'] },
   thick: { css: () => grad(CM.thick, 0, 70), ticks: ['0 km', '35', '70 km'] },
+  mantle: { css: () => grad(CM.mantle, -1, 1), ticks: ['cold', 'mean', 'hot (±2 rms)'] },
+  damage: { css: () => grad(CM.damage, 0, 1), ticks: ['0 intact', '0.5', '1 broken'] },
   plates: { css: () => `linear-gradient(90deg, ${Array.from({ length: 8 }, (_, p) => `rgb(${hsl((p * 0.6180339) % 1, 0.5, 0.5).map(Math.round)})`).join(',')})`, ticks: ['one hue per plate', 'lighter = continental'] },
 };
 function grad(map, lo, hi) { return `linear-gradient(90deg, ${map.map(([v, c]) => `rgb(${c}) ${((v - lo) / (hi - lo) * 100).toFixed(1)}%`).join(', ')})`; }
@@ -673,16 +1069,20 @@ function updateLegend() {
 }
 
 // ---------- controls ----------
+const mult = id => Math.pow(10, +$(id).value);
 function fmtOutputs() {
-  const f = +$('res').value, N = 10 * f * f + 2, R = +$('radius').value;
+  const f = +$('res').value, N = 10 * f * f + 2, R = +$('radius').value, nf = new Intl.NumberFormat('en-US');
   const spacingKm = R * Math.sqrt(8 * Math.PI / (Math.sqrt(3) * N));
-  $('resOut').textContent = `f ${f} · ${new Intl.NumberFormat('en-US').format(N)} cells · ~${Math.round(spacingKm)} km`;
+  $('resOut').textContent = `f ${f} · ${nf.format(N)} cells · ~${Math.round(spacingKm)} km`;
   $('contOut').textContent = `${Math.round(+$('cont').value * 100)} %`;
   $('platesOut').textContent = $('plates').value;
-  $('radiusOut').textContent = `${new Intl.NumberFormat('en-US').format(+$('radius').value)} km`;
+  $('radiusOut').textContent = `${nf.format(R)} km`;
   $('dtOut').textContent = `${(+$('dt').value).toFixed(2)} Myr`;
+  for (const id of ['slab', 'flow', 'insul', 'coll']) { dyn[id] = mult(id); $(id + 'Out').textContent = `×${dyn[id].toFixed(2)}`; }
+  dyn.ocean = +$('ocean').value; $('oceanOut').textContent = `${dyn.ocean.toFixed(2)} km mean depth`;
 }
 ['res', 'cont', 'plates', 'radius', 'seed'].forEach(id => $(id).addEventListener('input', () => { fmtOutputs(); markPending(); }));
+['slab', 'flow', 'insul', 'coll', 'ocean'].forEach(id => $(id).addEventListener('input', () => { fmtOutputs(); dirty = true; }));
 $('dt').addEventListener('input', () => { ui.dt = +$('dt').value; fmtOutputs(); });
 $('reseed').addEventListener('click', () => { $('seed').value = 1 + Math.floor(Math.random() * 99999); resetWorld(); });
 $('reset').addEventListener('click', resetWorld);
@@ -695,7 +1095,7 @@ $('views').addEventListener('click', e => {
   for (const x of $('views').querySelectorAll('button')) x.setAttribute('aria-pressed', x === b);
   updateLegend(); dirty = true;
 });
-$('bounds').addEventListener('change', () => { ui.bounds = $('bounds').checked; dirty = true; });
+for (const id of ['bounds', 'arrows', 'hotspots']) $(id).addEventListener('change', () => { ui[id] = $(id).checked; dirty = true; });
 function setPanel(show) {
   $('panel').hidden = !show;
   $('toggle').textContent = show ? 'Hide controls' : 'Show controls';
@@ -729,7 +1129,7 @@ canvas.addEventListener('pointermove', e => {
   }
   p.x = e.clientX; p.y = e.clientY;
 });
-const endPtr = e => { pointers.delete(e.pointerId); if (performance.now() - lastMove > 80) cam.spin = [0, 0]; if (pointers.size) cam.spin = [0, 0]; };
+const endPtr = e => { pointers.delete(e.pointerId); if (performance.now() - lastMove > 80 || pointers.size) cam.spin = [0, 0]; };
 canvas.addEventListener('pointerup', endPtr); canvas.addEventListener('pointercancel', endPtr);
 canvas.addEventListener('wheel', e => { e.preventDefault(); const k = e.deltaMode === 1 ? 16 : 1; zoom(Math.exp(e.deltaY * k * (e.ctrlKey ? 0.01 : 0.0015))); }, { passive: false });
 let gScale = 1;

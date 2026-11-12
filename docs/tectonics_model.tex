@@ -1,0 +1,550 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+\newcommand{\vect}[1]{\bm{#1}}
+\newcommand{\rr}{\vect{r}}
+\newcommand{\om}{\vect{\omega}}
+\newcommand{\uu}{\vect{u}}
+\newcommand{\nn}{\hat{\vect{n}}}
+\newcommand{\Myr}{\,\mathrm{Myr}}
+\newcommand{\km}{\,\mathrm{km}}
+\newcommand{\gs}{\nabla_{\!s}}
+
+\title{A Kinematic Plate Tectonics Model\\for Procedural World Generation}
+\author{Design notes}
+\date{November 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent This document specifies the largest-scale stage of a multi-scale
+world generator: a plate tectonics simulation on a full sphere. Plates are
+rigid caps that rotate exactly, crust lives in each plate's own frame so it is
+never smeared by advection, a low-resolution mantle temperature field supplies
+basal drag, and rifting follows weak lines under tension. Elevation is a
+diagnostic, not a state variable. The model is intended for a game, so
+plausibility and robustness to coarse resolution take priority over accuracy.
+Section~\ref{sec:status} separates what is established geophysics from what is
+untested construction.
+\end{abstract}
+
+\section{Design principles}
+
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Plates are given, not emergent.} Obtaining plates from mantle
+convection requires delicate rheology and high resolution. Here plates are
+explicit objects.
+\item \textbf{Exact updates wherever possible.} Rigid rotation and linear
+relaxation both have closed-form updates that hold for any time step
+$\Delta t$.
+\item \textbf{Rates, not events.} Anything irreversible (rifting, welding,
+hotspot birth) is expressed as a rate per unit time, so its statistics do not
+depend on $\Delta t$.
+\item \textbf{Geometric conservation.} Crust is created and destroyed in
+proportion to the area swept by plate motion, which is independent of grid
+resolution.
+\item \textbf{Carry only what feeds back.} The tectonic stage stores the
+fields that influence plate dynamics (crust type, thickness, age, damage),
+plus history fields that the next stage needs. Everything else is derived.
+\end{enumerate}
+
+Units throughout are kilometres and millions of years (Myr); conveniently,
+$1\km/\mathrm{Myr} = 1$\,mm/yr.
+
+\section{State}
+
+\subsection{Grids}
+
+Use one lattice of $N$ cells on a sphere of radius $R$, with cell areas $a_i$
+and centres $\rr_i$. The lattice must support a constant-time lookup from a
+position to the index of the containing cell. A cube-sphere (six square grids
+projected onto the sphere) is the simplest choice; HEALPix (Hierarchical Equal
+Area isoLatitude Pixelization) gives equal areas.
+
+The same lattice is used in two roles: once fixed in the mantle frame (the
+\emph{world grid}), and once per plate, fixed in that plate's co-moving frame
+(the \emph{plate grid}). Plate grids are sparse: store only occupied cells, so
+total memory is close to $N$ records, not $N$ times the number of plates.
+
+\subsection{Variables}
+
+\begin{table}[h]
+\centering
+\begin{tabularx}{\textwidth}{@{}llX@{}}
+\toprule
+Owner & Symbol & Meaning \\
+\midrule
+Plate $p$ & $q_p$ & Unit quaternion taking plate-frame positions to world positions \\
+          & $\om_p$ & Angular velocity (world frame), recomputed every step \\
+Plate cell & type & Oceanic or continental \\
+          & $h$ & Crust thickness \\
+          & $t_0$ & Creation time (age is $t - t_0$) \\
+          & $d$ & Damage, $0 \le d \le 1$ \\
+          & $t_\mathrm{or}$, kind & Time and kind of last mountain-building or rifting event \\
+          & $\hat{\vect{\phi}}$ & Fold direction (unit tangent vector, plate frame) \\
+          & $V$ & Accumulated volcanic addition \\
+Mantle & $T_{lm}$ & Real spherical harmonic coefficients of temperature anomaly, $1 \le l \le L$ \\
+       & hotspots & List of world-frame positions with strength and expiry time \\
+Plate pair & polarity & Which plate subducts; time of last convergence \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The first four cell fields feed back into the dynamics. The remainder are
+history, written for the downstream stage.
+
+\section{One time step}
+
+\begin{enumerate}[leftmargin=*]
+\item Update the mantle temperature coefficients (Section~\ref{sec:mantle}).
+\item Assemble forces and solve for every plate's angular velocity
+(Section~\ref{sec:forces}).
+\item Rotate every plate (Section~\ref{sec:kin}).
+\item Composite the plates onto the world grid; create crust in gaps and
+resolve overlaps (Section~\ref{sec:composite}).
+\item Apply within-plate relaxations: erosion, damage healing, hotspot
+stamping (Sections~\ref{sec:iso} and~\ref{sec:mantle}).
+\item Every $\Delta t_r$: test for welding and rifting
+(Sections~\ref{sec:weld} and~\ref{sec:rift}).
+\end{enumerate}
+
+\section{Kinematics}\label{sec:kin}
+
+Every rigid motion of a cap on a sphere is a rotation about an axis through
+the centre. A point of plate $p$ at world position $\rr$ moves with velocity
+\begin{equation}
+\vect{v}(\rr) = \om_p \times \rr .
+\end{equation}
+With $\om_p$ held constant over the step, the orientation update is exact:
+\begin{equation}
+q_p \leftarrow
+\Bigl[\cos\tfrac{\theta}{2},\; \hat{\om}_p \sin\tfrac{\theta}{2}\Bigr] \otimes q_p,
+\qquad \theta = |\om_p|\,\Delta t .
+\end{equation}
+A plate-frame position $\vect{s}$ appears in the world at
+$\rr = q_p\,\vect{s}\,q_p^{*}$, and the inverse lookup is
+$\vect{s} = q_p^{*}\,\rr\,q_p$.
+
+\section{Compositing: creation and destruction of crust}\label{sec:composite}
+
+For each world cell $i$ and each plate $p$ whose bounding cap contains $\rr_i$,
+compute $\vect{s} = q_p^{*}\rr_i q_p$ and look up the plate cell containing
+$\vect{s}$. If that cell is occupied, plate $p$ \emph{covers} world cell $i$.
+
+The lookup runs from world to plate, never the reverse. Every world point maps
+to exactly one cell of each plate grid, so plate interiors cannot develop
+pinholes from lattice aliasing, and crust data is never interpolated while it
+moves.
+
+\subsection{Gaps: sea-floor spreading}
+
+A world cell covered by no plate is a gap. Assign gap cells to plates by a
+multi-source breadth-first flood from the gap edges, which shares the new
+crust roughly evenly between the diverging plates. In the assigned plate,
+occupy the cell at $\vect{s}$ with oceanic crust, thickness $h_\mathrm{oc}$,
+creation time $t_0 = t$, and zero damage. The line of youngest crust is the
+mid-ocean ridge.
+
+\subsection{Overlaps: subduction, accretion, collision}
+
+Define a cell as \emph{subductable} if it is oceanic and thinner than
+$h_\mathrm{crit}$. Thickened oceanic crust (island arcs, hotspot plateaus) and
+all continental crust are buoyant and are not subductable.
+
+For a world cell covered by plates $p$ and $q$:
+\begin{itemize}[leftmargin=*]
+\item \textbf{Choose the lower plate.} If the pair already has a recorded
+polarity, use it. Otherwise the plate whose cell is subductable goes down; if
+both are, the older (denser) one does. Record the polarity on the pair so it
+does not flicker from cell to cell.
+\item \textbf{Lower cell subductable (subduction).} Delete the cell from the
+lower plate. Add its area to the subduction flux $\Phi_i$ at this world cell,
+and flag the lower plate's adjacent boundary cells as carrying a slab of the
+deleted cell's age.
+\item \textbf{Lower cell not subductable (accretion or collision).} Delete
+the cell from the lower plate and add its thickness to the upper plate's cell,
+conserving crust volume. Set the upper cell's event kind to
+\emph{collisional}, $t_\mathrm{or} = t$, raise its damage, and set the fold
+direction perpendicular to the relative velocity:
+$\hat{\vect{\phi}} \propto \rr \times (\vect{v}_p - \vect{v}_q)$. If the
+upper cell is oceanic and the merged thickness exceeds $h_\mathrm{crit}$,
+relabel it continental. Record the cell as a contact cell for the pair
+(used in Sections~\ref{sec:forces} and~\ref{sec:weld}).
+\end{itemize}
+
+Where thickness exceeds $h_\mathrm{max}$, move the excess to neighbouring
+cells of the same plate. This spreads a collision zone into a plateau.
+
+\subsection{Volcanic arcs}
+
+On the upper plate, compute the distance $\delta$ from the subduction front by
+a breadth-first search limited to a few cells. Thicken the crust at a rate
+\begin{equation}
+\frac{\partial h}{\partial t} = A\, v_\mathrm{conv}\, g(\delta),
+\end{equation}
+where $v_\mathrm{conv}$ is the local convergence speed and $g$ is a bump
+peaked at $\delta_\mathrm{arc} \approx 200\km$. Add the same amount to $V$ and
+raise the damage. When the cell size exceeds $\delta_\mathrm{arc}$ the arc
+collapses onto the boundary cell, which is the intended coarse limit. On
+oceanic upper plates this builds island arcs, which later become
+non-subductable and accrete onto continents.
+
+\section{Isostasy and elevation}\label{sec:iso}
+
+Elevation $E$ is computed on demand from the state. For continental crust,
+assume Airy isostasy (the crust floats on the mantle like an iceberg):
+\begin{equation}
+E = (h - h_0)\left(1 - \frac{\rho_c}{\rho_m}\right),
+\end{equation}
+with $h_0 \approx 35\km$ the thickness that sits at sea level and
+$1 - \rho_c/\rho_m \approx 0.15$. For oceanic crust, depth follows the cooling
+of the plate with age $\tau = t - t_0$:
+\begin{equation}
+E = -\Bigl[z_r + k_z \sqrt{\min(\tau, \tau_\mathrm{flat})}\Bigr],
+\end{equation}
+with $z_r \approx 2.5\km$, $k_z \approx 0.35\km\,\mathrm{Myr}^{-1/2}$ and
+$\tau_\mathrm{flat} \approx 80\Myr$. Oceanic cells thickened beyond
+$h_\mathrm{oc}$ receive an additional Airy term.
+
+Erosion is the one downstream process that feeds back, because it thins the
+crust. Approximate it as relaxation of excess thickness, with an exact update:
+\begin{equation}
+h \leftarrow h_0 + (h - h_0)\,e^{-\Delta t/\tau_e} \qquad (h > h_0).
+\end{equation}
+
+\section{Mantle temperature field}\label{sec:mantle}
+
+The mantle is represented by a scalar temperature anomaly on the unit sphere,
+\begin{equation}
+T(\hat{\vect{x}}, t) = \sum_{l=1}^{L}\sum_{m=-l}^{l} T_{lm}(t)\,Y_{lm}(\hat{\vect{x}}),
+\end{equation}
+using real orthonormal spherical harmonics $Y_{lm}$ and a cutoff $L$ of 4 to
+6. The $l = 0$ term is omitted so the mean cannot drift.
+
+\subsection{Evolution}
+
+Each coefficient relaxes linearly and is driven by a source:
+\begin{equation}
+\frac{dT_{lm}}{dt} = -\lambda_l T_{lm} + S_{lm},
+\qquad
+\lambda_l = \frac{1 + \epsilon\, l(l+1)}{\tau_m} .
+\end{equation}
+The $\epsilon$ term is diffusion, which damps short wavelengths faster.
+Holding the source constant over a step gives the exact update
+\begin{equation}
+T_{lm} \leftarrow T_{lm}\,e^{-\lambda_l \Delta t}
+ + \frac{S_{lm}}{\lambda_l}\left(1 - e^{-\lambda_l \Delta t}\right).
+\end{equation}
+The source on the world grid is
+\begin{equation}
+S_i = -\alpha\,\frac{\Phi_i}{a_i\,\Delta t} + \beta\,C_i ,
+\end{equation}
+where $\Phi_i$ is the area subducted at cell $i$ during the step and $C_i$ is
+1 if the cell is covered by continental crust and 0 otherwise. Subduction
+cools the mantle; continents insulate it. Project onto the harmonics with
+\begin{equation}
+S_{lm} = \sum_i S_i\, Y_{lm}(\hat{\vect{x}}_i)\,\frac{a_i}{R^2} .
+\end{equation}
+
+\subsection{Flow}
+
+Surface mantle flow runs from hot to cold:
+\begin{equation}
+\uu = -k\,\gs T ,
+\end{equation}
+where $\gs$ is the surface gradient. Evaluate $T$ on the world grid and
+difference between neighbours, or differentiate the harmonics analytically.
+This flow is purely divergent (poloidal). Rotational (toroidal) surface motion
+arises from the rigid plates themselves.
+
+\subsection{Hotspots}
+
+Hotspots are points fixed in the world frame. They are born as a Poisson
+process with rate density proportional to $\max(T, 0)$ and live for
+$\tau_\mathrm{hs}$. Each step, a hotspot thickens whatever plate cell lies
+above it at a fixed rate, adds to $V$, and raises damage. Plate motion turns
+this into an age-progressive volcanic chain.
+
+\section{Forces and the torque balance}\label{sec:forces}
+
+Plate inertia is negligible, so at every instant the torques on each plate sum
+to zero. All torques are taken about the centre of the sphere.
+
+\subsection{Basal drag}
+
+The traction on the base of plate $p$ at cell $i$ is
+$c_i\,(\uu_i - \om_p \times \rr_i)$. The coupling $c_i$ is small beneath
+oceanic crust and grows with thickness and age beneath continents, which have
+deep roots. Using
+$\rr \times (\om \times \rr) = (R^2 \mathsf{I} - \rr\rr^{\mathsf T})\,\om$,
+the drag torque is
+\begin{equation}
+\vect{\tau}^\mathrm{drag}_p = \vect{b}_p - \mathsf{M}_p\,\om_p,
+\qquad
+\vect{b}_p = \sum_{i \in p} c_i a_i\, \rr_i \times \uu_i,
+\qquad
+\mathsf{M}_p = \sum_{i \in p} c_i a_i \left(R^2 \mathsf{I} - \rr_i \rr_i^{\mathsf T}\right).
+\end{equation}
+$\mathsf{M}_p$ has the form of an inertia tensor weighted by drag and is
+positive definite for any plate of more than one cell.
+
+\subsection{Slab pull}
+
+On each boundary cell $j$ of plate $p$ flagged as carrying a slab, apply a
+force per unit length
+\begin{equation}
+\vect{f}_j = F_\mathrm{sp}\,\min\!\Bigl(1, \sqrt{\tau_j/\tau_\mathrm{ref}}\Bigr)\,\nn_j ,
+\end{equation}
+where $\tau_j$ is the age of the crust most recently subducted there and
+$\nn_j$ is the unit tangent vector pointing out of the plate across the
+boundary. Older slabs are colder and pull harder. The flag expires
+$t_\mathrm{slab}$ after convergence stops, which represents the slab breaking
+off. With boundary segment length $\ell_j$:
+\begin{equation}
+\vect{\tau}^\mathrm{sp}_p = \sum_j \ell_j\, \rr_j \times \vect{f}_j .
+\end{equation}
+
+\subsection{Topographic body force (optional)}
+
+High ground pushes outward. As a crude proxy for the gradient of
+gravitational potential energy, apply a force per unit area
+$\vect{f}^g_i = -\gamma\,\gs E$ to every cell. Over young ocean floor this is
+ridge push; over thick continental crust it favours extension. Its torque is
+$\vect{\tau}^{g}_p = \sum_i a_i\,\rr_i \times \vect{f}^g_i$.
+
+\subsection{Contact resistance}
+
+At each contact cell $j$ between plates $p$ and $q$, apply a force on $p$ of
+$-\kappa_j(\om_p - \om_q) \times \rr_j$ and the opposite force on $q$. The
+coefficient $\kappa_j$ is large for continental collision and small for
+subduction. The resulting torque on $p$ is
+$-\mathsf{C}_{pq}(\om_p - \om_q)$ with
+\begin{equation}
+\mathsf{C}_{pq} = \sum_{j \in \mathrm{contact}(p,q)} \kappa_j
+\left(R^2 \mathsf{I} - \rr_j \rr_j^{\mathsf T}\right).
+\end{equation}
+
+\subsection{Solve}
+
+Setting the total torque on every plate to zero gives a linear system in the
+angular velocities:
+\begin{equation}
+\Bigl(\mathsf{M}_p + \sum_{q} \mathsf{C}_{pq}\Bigr)\om_p
+ - \sum_{q} \mathsf{C}_{pq}\,\om_q
+ = \vect{b}_p + \vect{\tau}^\mathrm{sp}_p + \vect{\tau}^{g}_p .
+\label{eq:solve}
+\end{equation}
+For $P$ plates this is a symmetric positive definite system of size $3P$,
+solved directly each step. Without contacts it decouples into one
+$3\times 3$ solve per plate. Because the contact term is treated implicitly,
+colliding plates slow smoothly instead of oscillating.
+
+\section{Welding}\label{sec:weld}
+
+A pair of plates welds when their contact is continental and the mean
+relative speed over the contact cells has stayed below $v_\mathrm{weld}$ for
+longer than $t_\mathrm{weld}$. To weld $q$ into $p$: copy each occupied cell
+of $q$ into $p$'s grid by nearest-cell lookup through
+$q_p^{*}\,q_q$, set the damage of the contact cells to 1, mark their event
+kind as \emph{suture}, and delete $q$. This is the only occasion on which
+crust is resampled.
+
+\section{Rifting}\label{sec:rift}
+
+A plate rifts along a line that is both weak and under tension.
+
+\subsection{Strength}
+
+Each plate cell has a strength (force per unit length)
+\begin{equation}
+S = S_\mathrm{base}\,(1 - d)\,\exp\!\left[-\frac{\max(T, 0)}{T_w}\right],
+\end{equation}
+where $T$ is the mantle anomaly beneath the cell. For oceanic crust
+$S_\mathrm{base}$ is large and grows with $\sqrt{\tau}$, so oceans almost
+never rift. For continental crust $S_\mathrm{base}$ is smaller and grows
+slowly with time since the last event, so old undisturbed interiors (cratons)
+are strong. Damage is raised by sutures, arcs, hotspots and collisions, and
+heals exactly:
+\begin{equation}
+d \leftarrow d\,e^{-\Delta t/\tau_h}.
+\end{equation}
+
+\subsection{Candidate lines}
+
+Every $\Delta t_r$, for each plate, place $K$ seed points evenly around its
+perimeter. From each seed run Dijkstra's shortest-path algorithm across the
+plate's cells with edge cost $S\,\ell$. Keep the paths between seed pairs
+that divide the plate into parts $A$ and $B$ each holding at least a fraction
+$f_\mathrm{min}$ of its area.
+
+\subsection{Tension across a candidate line}
+
+The plate is rigid, so it has no strain, but the load a line $\Gamma$ must
+carry follows from a free-body argument. Let $\vect{\tau}_A$ be the net
+external torque on part $A$ alone, evaluated at the plate's actual $\om_p$:
+\begin{equation}
+\vect{\tau}_A = \sum_{i \in A} a_i\,\rr_i \times
+\Bigl[c_i(\uu_i - \om_p \times \rr_i) + \vect{f}^g_i\Bigr]
++ \bigl(\text{slab pull and contact torques on the boundary of } A\bigr).
+\end{equation}
+Since the whole plate is in balance, $\vect{\tau}_B = -\vect{\tau}_A$, and
+$\Gamma$ must transmit $-\vect{\tau}_A$ to $A$. A uniform line tension
+$\sigma$ along $\Gamma$ exerts a torque $-\sigma\,\vect{g}$ on $A$, where
+\begin{equation}
+\vect{g} = \int_\Gamma \rr \times \nn \, d\ell
+\end{equation}
+and $\nn$ is the unit tangent vector normal to $\Gamma$ pointing from $B$ into
+$A$. Projecting the balance onto this mode gives
+\begin{equation}
+\sigma = \frac{\vect{\tau}_A \cdot \vect{g}}{\vect{g}\cdot\vect{g}} .
+\end{equation}
+Positive $\sigma$ means the two parts are being pulled apart. The projection
+discards shear and bending along the line.
+
+\subsection{Damage growth and splitting}
+
+Let $\bar S$ be the mean strength along $\Gamma$. Where $\sigma > \bar S$,
+grow the damage of the cells on the path:
+\begin{equation}
+\frac{\partial d}{\partial t} = k_r\,\frac{\sigma - \bar S}{\bar S} .
+\end{equation}
+Damage lowers both $\bar S$ and the path cost, so a stressed line is selected
+again at the next check and weakens faster: the rift localises. When $\bar S$
+falls below $\varepsilon\,S_\mathrm{base}$, split the plate. Flood-fill from
+either side of $\Gamma$ to label parts $A$ and $B$, move the cells of $B$
+into a new plate with the same orientation $q_p$, and mark cells bordering
+$\Gamma$ as \emph{rifted margin}. The next solve of Eq.~\eqref{eq:solve}
+gives the two parts separate angular velocities, and the gap between them
+fills with new ocean floor.
+
+If the tension subsides before the split, the partial damage remains and
+heals slowly. This is a failed rift, and a preferred site for the next one.
+
+\section{Initial conditions}
+
+Scatter plate seeds on the sphere and grow them by randomised flood fill to
+give irregular plates. Mark a fraction (about 30\%) of the area as continental
+crust of thickness $h_0$ in a few contiguous patches, and the rest as oceanic
+with random ages. Give the $T_{lm}$ small random values. Run for several
+hundred Myr before using the output, so the initial geometry is forgotten.
+
+\section{Behaviour under coarsening}
+
+\begin{table}[h]
+\centering
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+Component & Why it survives a larger $\Delta t$ or cell size \\
+\midrule
+Plate rotation & Exact for any $\Delta t$ \\
+Crust transport & No resampling, hence no numerical diffusion \\
+Creation and destruction & Set by swept area \\
+Mantle field, erosion, healing & Exact exponential updates \\
+Torque balance & Implicit linear solve; sums converge as the grid refines \\
+Rifting, hotspots & Rate-based \\
+Arcs, plateaus & Collapse onto single cells when unresolved \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The main limit is that $\om_p$ is frozen during a step. A plate should not
+cross more than a few cells per step, or boundary interactions are skipped:
+with speeds up to $100\km/\mathrm{Myr}$ and $100\km$ cells, that suggests
+$\Delta t$ of 1 to 3 Myr. Transform faults, trenches, back-arc basins and
+anything narrower than a cell are left to the next stage.
+
+\section{Output to the next stage}
+
+For each world cell, export: crust type, thickness, age, isostatic elevation,
+event kind and time, fold direction, volcanic addition, damage, plate
+velocity, and distance to the nearest boundary of each kind. A higher
+resolution stage can then add ridges aligned with the fold direction,
+roughness that decays with time since the event, trenches along subduction
+fronts, individual volcanoes where $V$ is high, and rivers and erosion on top.
+
+\section{Parameters}
+
+Values are starting points of the right order of magnitude. Force-like
+parameters ($F_\mathrm{sp}$, $c$, $\kappa$, $\gamma$, $k$, $S_\mathrm{base}$)
+only matter through their ratios; tune them so plate speeds fall between 10
+and $100\km/\mathrm{Myr}$.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+Symbol & Meaning & Start value \\
+\midrule
+$R$ & Planet radius & $6371\km$ \\
+$\Delta t$ & Time step & 1--3 Myr \\
+$\Delta t_r$ & Interval between weld and rift checks & 10 Myr \\
+$h_\mathrm{oc}$, $h_0$, $h_\mathrm{max}$ & Oceanic, reference, maximum thickness & 7, 35, $70\km$ \\
+$h_\mathrm{crit}$ & Thickest subductable oceanic crust & $15\km$ \\
+$\tau_e$ & Erosion time & 200 Myr \\
+$L$ & Harmonic cutoff & 4--6 \\
+$\tau_m$ & Mantle relaxation time & 150 Myr \\
+$\epsilon$ & Mantle diffusion factor & 0.05 \\
+$\tau_\mathrm{hs}$ & Hotspot lifetime & 100 Myr \\
+$\tau_\mathrm{ref}$ & Slab age for full pull & 80 Myr \\
+$t_\mathrm{slab}$ & Slab persistence after convergence stops & 10 Myr \\
+$\delta_\mathrm{arc}$ & Arc distance from trench & $200\km$ \\
+$v_\mathrm{weld}$, $t_\mathrm{weld}$ & Welding speed and duration & $5\km/\mathrm{Myr}$, 20 Myr \\
+$\tau_h$ & Damage healing time & 1000 Myr \\
+$K$, $f_\mathrm{min}$ & Rift seeds per plate, minimum part fraction & 12, 0.1 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Status of the claims}\label{sec:status}
+
+\paragraph{Established.} Rigid plate motion as rotation about an Euler pole.
+Airy isostasy and the square-root-of-age law for ocean depth~\cite{parsons}.
+Slab pull as the dominant driving force, with fast plates being those
+attached to slabs and slow plates those carrying continents~\cite{forsyth}.
+The observation that rifts tend to reuse old sutures and avoid
+cratons~\cite{wilson}.
+
+\paragraph{Hypothesis in the literature.} That supercontinents warm the mantle
+beneath them and thereby promote their own breakup~\cite{anderson,gurnis}.
+This is contested; here it is adopted because it gives a mechanism cheaply.
+
+\paragraph{Borrowed design.} Rigid plates with per-plate crust and overlap
+rules follow the approach of Cortial et al.~\cite{cortial} and of the
+Tectonics.js project by Carl Davidson.
+
+\paragraph{Untested construction.} The harmonic mantle field and its source
+terms, the gradient flow law, the topographic body force, the coupled contact
+solve, and the whole rifting procedure (strength field, path search, projected
+tension, damage growth) are assembled for this document and have not been
+run. That supercontinent cycles emerge is a conjecture. Expect to tune
+thresholds, and expect at least one of these pieces to need redesign.
+
+\paragraph{References.} The citations below are given from memory and should
+be checked before being relied upon.
+
+\begin{thebibliography}{9}
+\bibitem{cortial} Y.~Cortial, A.~Peytavie, E.~Galin, E.~Gu\'erin,
+``Procedural Tectonic Planets,'' \emph{Computer Graphics Forum} 38(2), 2019.
+\bibitem{forsyth} D.~Forsyth, S.~Uyeda, ``On the relative importance of the
+driving forces of plate motion,'' \emph{Geophysical Journal of the Royal
+Astronomical Society} 43, 163--200, 1975.
+\bibitem{parsons} B.~Parsons, J.~G.~Sclater, ``An analysis of the variation of
+ocean floor bathymetry and heat flow with age,'' \emph{Journal of Geophysical
+Research} 82, 803--827, 1977.
+\bibitem{wilson} J.~T.~Wilson, ``Did the Atlantic close and then re-open?''
+\emph{Nature} 211, 676--681, 1966.
+\bibitem{anderson} D.~L.~Anderson, ``Hotspots, polar wander, Mesozoic
+convection and the geoid,'' \emph{Nature} 297, 391--393, 1982.
+\bibitem{gurnis} M.~Gurnis, ``Large-scale mantle convection and the
+aggregation and dispersal of supercontinents,'' \emph{Nature} 332, 695--699,
+1988.
+\end{thebibliography}
+
+\end{document}
