@@ -408,6 +408,7 @@ const K_ = {
   TAU_HS: 100, TAU_REF: 80, T_SLAB: 10, D_ARC: 200,  // hotspots, slabs, arcs
   // Force-like constants only matter through their ratios. Drag coupling under ocean is the unit.
   C_EXP: 2, POLARITY_OVERRIDE: true, ARC_FROM_PAIR: false, OLD_COUPLING: false, OLD_STRENGTH: false, HMAX_ANY: false, // bisection switches
+  SPILL_RELABEL: false, // thick continental crust spreads onto adjacent seafloor and relabels it continental
   CLOG: true,         // a trench clogs (stiff contact) when the subducting plate presents buoyant crust
   C_OC: 1,            // basal drag coupling up to M_REF of lithosphere; scales as (m / M_REF)^2 beyond
   // mantle lithosphere thickness m (km): seafloor from age, continents carried per record
@@ -837,11 +838,12 @@ function createSim(grid, prm, dyn) {
     // continental crust onto adjacent seafloor leaked it into subduction: about 1.4 km/100 Myr, sphere-averaged.
     for (let i = 0; i < N; i++) {
       const s = slotW[i]; if (H[s] <= H_MAX) continue;
-      const same = j => owner[j] === owner[i] && (K_.HMAX_ANY || Ty[slotW[j]] === Ty[s]);
+      const same = j => owner[j] === owner[i] && (K_.HMAX_ANY || K_.SPILL_RELABEL || Ty[slotW[j]] === Ty[s]);
       let m = 0; for (let k = off[i]; k < off[i + 1]; k++) if (same(nbr[k])) m++;
       if (!m) continue;
       const ex = (H[s] - H_MAX) / m; H[s] = H_MAX;
-      for (let k = off[i]; k < off[i + 1]; k++) { const j = nbr[k]; if (same(j)) H[slotW[j]] += ex; }
+      for (let k = off[i]; k < off[i + 1]; k++) { const j = nbr[k]; if (!same(j)) continue; const t = slotW[j]; H[t] += ex;
+        if (K_.SPILL_RELABEL && Ty[s] === 1 && Ty[t] === 0 && H[t] > H_CRIT) { ML[t] = mLith(t, time); Ty[t] = 1; } } // orogenic spreading extends the continent
     }
     for (let s = 0; s < top; s++) if (Ty[s] >= 0) D[s] *= eh;
     // hotspots: Poisson births with rate density proportional to max(T, 0); fixed in the world frame
