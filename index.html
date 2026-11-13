@@ -412,7 +412,7 @@ const K_ = {
   TAU_HS: 100, TAU_REF: 80, T_SLAB: 10, D_ARC: 200,  // hotspots, slabs, arcs
   // Force-like constants only matter through their ratios. Drag coupling under ocean is the unit.
   C_EXP: 2, POLARITY_OVERRIDE: true, ARC_FROM_PAIR: false, OLD_COUPLING: false, OLD_STRENGTH: false, HMAX_ANY: false, // bisection switches
-  SPILL_RELABEL: true,  // thick continental crust spreads onto adjacent seafloor and relabels it continental
+  SPILL_RELABEL: true, H_SPILL: 35, // thick continental crust spreads onto adjacent seafloor and relabels it continental
   CLOG: true,         // a trench clogs (stiff contact) when the subducting plate presents buoyant crust
   C_OC: 1,            // basal drag coupling up to M_REF of lithosphere; scales as (m / M_REF)^2 beyond
   // mantle lithosphere thickness m (km): seafloor from age, continents carried per record
@@ -849,7 +849,9 @@ function createSim(grid, prm, dyn) {
       if (!m) continue;
       const ex = (H[s] - H_MAX) / m; H[s] = H_MAX;
       for (let k = off[i]; k < off[i + 1]; k++) { const j = nbr[k]; if (!same(j)) continue; const t = slotW[j]; H[t] += ex;
-        if (K_.SPILL_RELABEL && Ty[s] === 1 && Ty[t] === 0 && H[t] > H_CRIT) { ML[t] = mLith(t, time); Ty[t] = 1; } } // orogenic spreading extends the continent
+        // orogenic spreading extends the continent, but only once the recipient reaches continental thickness:
+        // relabelling at h_crit stored the same volume as thin continent and let area grow toward volume / h_crit
+        if (K_.SPILL_RELABEL && Ty[s] === 1 && Ty[t] === 0 && H[t] > K_.H_SPILL) { ML[t] = mLith(t, time); Ty[t] = 1; } }
     }
     for (let s = 0; s < top; s++) if (Ty[s] >= 0) D[s] *= eh;
     // hotspots: Poisson births with rate density proportional to max(T, 0); fixed in the world frame
