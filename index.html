@@ -407,7 +407,7 @@ const K_ = {
   L: 6, TAU_M: 150, EPS: 0.05,                       // mantle
   TAU_HS: 100, TAU_REF: 80, T_SLAB: 10, D_ARC: 200,  // hotspots, slabs, arcs
   // Force-like constants only matter through their ratios. Drag coupling under ocean is the unit.
-  C_OC: 1,            // basal drag coupling under 100 km of lithosphere; scales as (m / M_REF)^2
+  C_OC: 1,            // basal drag coupling up to M_REF of lithosphere; scales as (m / M_REF)^2 beyond
   // mantle lithosphere thickness m (km): seafloor from age, continents carried per record
   M_REF: 100, M_EQ: 150, M_CRATON: 250,              // reference, ordinary continental, cratonic
   M_OC0: 10, K_M: 9, M_OC_MAX: 100,                  // seafloor m = min(M_OC_MAX, M_OC0 + K_M sqrt(age))
@@ -429,7 +429,7 @@ const K_ = {
   D_COLL: 0.3,        // damage added per collision event
   // rifting and welding (spec sections 9-10); strengths are forces per unit length, same units as F_SP
   S_CONT: 7.5e5,      // continental strength at m = M_REF and h = H0
-  S_OC: 1.5e7,        // oceanic strength at m = M_REF (no weak quartz-rich crust)
+  S_OC: 3e7,          // oceanic strength at m = M_REF (no weak quartz-rich crust)
   T_W: 0.5,           // mantle temperature (model units) that weakens by a factor e
   DT_R: 10, K_SEEDS: 12, F_MIN: 0.1,
   K_R: 0.005,         // damage growth rate per unit fractional overload, 1/Myr
@@ -465,7 +465,7 @@ function createSim(grid, prm, dyn) {
   const release = s => { Ty[s] = -1; H[s] = 0; freeList.push(s); };
   function copyRec(dst, src) { Ty[dst] = Ty[src]; H[dst] = H[src]; T0[dst] = T0[src]; D[dst] = D[src]; SA[dst] = SA[src]; ST[dst] = ST[src]; TOR[dst] = TOR[src]; KD[dst] = KD[src]; ML[dst] = ML[src]; }
   const mLith = (s, time) => Ty[s] === 1 ? ML[s] : Math.min(K_.M_OC_MAX, K_.M_OC0 + K_.K_M * Math.sqrt(Math.max(0, time - T0[s])));
-  const coupling = (s, time) => K_.C_OC * Math.max(0.3, (mLith(s, time) / K_.M_REF) ** 2); // deeper keels couple harder
+  const coupling = (s, time) => K_.C_OC * Math.max(1, (mLith(s, time) / K_.M_REF) ** 2); // keels deeper than M_REF couple harder
   const subd = s => Ty[s] === 0 && H[s] < H_CRIT;
   function elevS(s, time) {
     if (Ty[s] === 1) return (H[s] - H0) * ISO;
@@ -638,7 +638,7 @@ function createSim(grid, prm, dyn) {
         C[3] -= kap * ry * rx; C[4] += kap * (R2 - ry * ry); C[5] -= kap * ry * rz;
         C[6] -= kap * rz * rx; C[7] -= kap * rz * ry; C[8] += kap * (R2 - rz * rz);
         // arc front: upper plate cell next to an actively subducting lower plate
-        if (rec.lower === q && ST[sj] > time - T_SLAB) {
+        if (ST[sj] > time - T_SLAB && !(ST[s] > time - T_SLAB)) { // q is actively subducting here and p is not
           const wx = W[p][0] - W[q][0], wy = W[p][1] - W[q][1], wz = W[p][2] - W[q][2];
           frontVel = Math.max(frontVel, R * Math.hypot(wy * z - wz * y, wz * x - wx * z, wx * y - wy * x));
         }
