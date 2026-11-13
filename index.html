@@ -445,7 +445,7 @@ const K_ = {
   OVER_CAP: 5,        // cap on the fractional overload driving damage growth
   V_WELD: 5, T_WELD: 20,
   INIT_RATE: 2.5e-6,  // passive-margin subduction initiation, per km of margin per Myr at unit age factor
-  INIT_AGE: 60, INIT_SCALE: 60, // age factor max(0, (age - INIT_AGE) / INIT_SCALE), age of the margin seafloor in Myr
+  INIT_AGE: 60, INIT_SCALE: 60, INIT_MIN_FRAC: 0.005, // smallest continental block that can initiate (fraction of sphere) // age factor max(0, (age - INIT_AGE) / INIT_SCALE), age of the margin seafloor in Myr
   WELD_MAX_FRAC: 0.5,  // deviation: no weld may create a plate covering more than this fraction of the sphere
   MAX_PLATES: 128,
 };
@@ -1062,8 +1062,10 @@ function createSim(grid, prm, dyn) {
   function initiatePlate(p, time) {
     const cellsP = []; for (let i = 0; i < N; i++) if (owner[i] === p) { loc[i] = cellsP.length; cellsP.push(i); }
     const n = cellsP.length, cleanup = () => { for (const i of cellsP) loc[i] = -1; };
-    const minCells = Math.max(K_.RIFT_MIN_CELLS, K_.RIFT_MIN_FRAC * N);
-    if (n < 2 * minCells) return cleanup();
+    // the block may be small (a microcontinent leaving a big ocean plate is the case that matters); only the
+    // remaining ocean plate must be substantial
+    const minCells = Math.max(K_.RIFT_MIN_CELLS, K_.INIT_MIN_FRAC * N), minPlate = Math.max(K_.RIFT_MIN_CELLS, K_.RIFT_MIN_FRAC * N);
+    if (n < minCells + minPlate) return cleanup();
     const cont = v => Ty[slotW[cellsP[v]]] === 1;
     let total = 0; for (const i of cellsP) total += area[i];
     const comp = new Int32Array(n).fill(-1), blocks = [];
@@ -1075,12 +1077,13 @@ function createSim(grid, prm, dyn) {
           if (cont(u)) { if (comp[u] < 0) { comp[u] = id; stack.push(u); } } else margin.add(u); } }
       blocks.push({ cells, margin: [...margin], A });
     }
+    for (let k = blocks.length - 1; k > 0; k--) { const j = Math.floor(rng() * (k + 1)); [blocks[k], blocks[j]] = [blocks[j], blocks[k]]; } // random order
     for (const b of blocks) {
       let Am = 0, age = 0; for (const v of b.margin) { const i = cellsP[v]; Am += area[i]; age += time - T0[slotW[i]]; }
       if (!b.margin.length) continue;
       age /= b.margin.length;
       const rest = total - b.A;
-      if (b.cells.length < minCells || b.A < K_.F_MIN * total || rest < K_.F_MIN * total || n - b.cells.length < minCells) continue;
+      if (b.cells.length < minCells || rest < K_.F_MIN * total || n - b.cells.length < minPlate) continue;
       const f = Math.max(0, (age - K_.INIT_AGE) / K_.INIT_SCALE);
       const prob = 1 - Math.exp(-K_.INIT_RATE * dyn.init * b.margin.length * sKm * f * K_.DT_R);
       if (rng() >= prob) continue;
