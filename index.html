@@ -415,7 +415,7 @@ const K_ = {
   TAU_MREG: 200,      // thinned continental lithosphere regrows toward M_EQ (never beyond it)
   TAU_REFERT: 1000,   // a root above M_EQ decays toward M_EQ while a slab is active beneath it
   RIFT_THIN: 0.5,     // m is multiplied by this on a rift line and its margin
-  H_F: 60, TAU_F: 30, // crust below H_F founders (eclogite) and is lost, timescale TAU_F
+  H_F: 65, TAU_F: 100, // crust below H_F founders (eclogite) and is lost, timescale TAU_F
   H_W: 15,            // km of crust above H0 that weakens lithosphere by a factor e (hot, quartz-rich)
   F_SP: 6e5,          // slab pull per unit trench length, in units of C_OC * km^2/Myr
   K_COLL: 5e4,        // contact resistance per unit contact length (km), continental collision
@@ -825,12 +825,15 @@ function createSim(grid, prm, dyn) {
     const ef = Math.exp(-h / K_.TAU_F), er = Math.exp(-h / K_.TAU_MREG);
     for (let i = 0; i < N; i++) { const s = slotW[i]; if (H[s] > K_.H_F) H[s] = K_.H_F + (H[s] - K_.H_F) * ef; }
     for (let s = 0; s < top; s++) if (Ty[s] === 1 && ML[s] < K_.M_EQ) ML[s] = K_.M_EQ + (ML[s] - K_.M_EQ) * er; // regrowth, never past M_EQ
-    for (let i = 0; i < N; i++) { // spread thickness above H_MAX to same-plate neighbours
+    // Spread thickness above H_MAX to same-plate neighbours of the same crust type (spec: same plate). Spilling
+    // continental crust onto adjacent seafloor leaked it into subduction: about 1.4 km/100 Myr, sphere-averaged.
+    for (let i = 0; i < N; i++) {
       const s = slotW[i]; if (H[s] <= H_MAX) continue;
-      let m = 0; for (let k = off[i]; k < off[i + 1]; k++) if (owner[nbr[k]] === owner[i]) m++;
+      const same = j => owner[j] === owner[i] && Ty[slotW[j]] === Ty[s];
+      let m = 0; for (let k = off[i]; k < off[i + 1]; k++) if (same(nbr[k])) m++;
       if (!m) continue;
       const ex = (H[s] - H_MAX) / m; H[s] = H_MAX;
-      for (let k = off[i]; k < off[i + 1]; k++) { const j = nbr[k]; if (owner[j] === owner[i]) H[slotW[j]] += ex; }
+      for (let k = off[i]; k < off[i + 1]; k++) { const j = nbr[k]; if (same(j)) H[slotW[j]] += ex; }
     }
     for (let s = 0; s < top; s++) if (Ty[s] >= 0) D[s] *= eh;
     // hotspots: Poisson births with rate density proportional to max(T, 0); fixed in the world frame
