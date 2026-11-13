@@ -202,7 +202,7 @@ dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-va
       </dl>
     </section>
 
-    <p class="note">Phase&nbsp;1–2 of the design notes: plate-frame crust, compositing with subduction polarity, arcs, erosion, a spherical-harmonic mantle, hotspots, and a torque balance (basal drag, slab pull, contact resistance) that sets every plate's spin each substep. Cratons are thick mantle-lithosphere roots seeded at the start; thick crust founders. Every 10&nbsp;Myr, plates stalled against each other weld, and each plate tests its weakest lines for rifting. Known issue: by about 2 Gyr most runs settle into two slow hemispheric plates.</p>
+    <p class="note">Phase&nbsp;1–2 of the design notes: plate-frame crust, compositing with subduction polarity, arcs, erosion, a spherical-harmonic mantle, hotspots, and a torque balance (basal drag, slab pull, contact resistance) that sets every plate's spin each substep. Cratons are thick mantle-lithosphere roots seeded at the start; thick crust founders. Every 10&nbsp;Myr, plates stalled against each other weld, and each plate tests its weakest lines for rifting. Known issue: by about 1.6 Gyr most runs jam into a few slow plates.</p>
     <p class="hint">Drag to orbit · scroll or pinch to zoom · <kbd>Space</kbd> pause · <kbd>H</kbd> hide panel</p>
   </aside>
 </div>
@@ -408,7 +408,7 @@ const K_ = {
   TAU_HS: 100, TAU_REF: 80, T_SLAB: 10, D_ARC: 200,  // hotspots, slabs, arcs
   // Force-like constants only matter through their ratios. Drag coupling under ocean is the unit.
   C_EXP: 2, POLARITY_OVERRIDE: true, ARC_FROM_PAIR: false, OLD_COUPLING: false, OLD_STRENGTH: false, HMAX_ANY: false, // bisection switches
-  SPILL_RELABEL: false, // thick continental crust spreads onto adjacent seafloor and relabels it continental
+  SPILL_RELABEL: true,  // thick continental crust spreads onto adjacent seafloor and relabels it continental
   CLOG: true,         // a trench clogs (stiff contact) when the subducting plate presents buoyant crust
   C_OC: 1,            // basal drag coupling up to M_REF of lithosphere; scales as (m / M_REF)^2 beyond
   // mantle lithosphere thickness m (km): seafloor from age, continents carried per record
@@ -421,7 +421,7 @@ const K_ = {
   H_F: 65, TAU_F: 100, // crust below H_F founders (eclogite) and is lost, timescale TAU_F
   H_W: 15,            // km of crust above H0 that weakens lithosphere by a factor e (hot, quartz-rich)
   F_SP: 6e5,          // slab pull per unit trench length, in units of C_OC * km^2/Myr
-  K_COLL: 5e4,        // contact resistance per unit contact length (km), continental collision
+  K_COLL: 1e5,        // contact resistance per unit contact length (km), continental collision
   K_SUB: 2e3,         //   ... and at subduction contacts
   U0: 40,             // km/Myr of mantle flow per unit (unit-sphere) temperature gradient
   ALPHA: 1.0,         // mantle cooling per unit area subducted
