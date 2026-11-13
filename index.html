@@ -408,6 +408,7 @@ const K_ = {
   TAU_HS: 100, TAU_REF: 80, T_SLAB: 10, D_ARC: 200,  // hotspots, slabs, arcs
   // Force-like constants only matter through their ratios. Drag coupling under ocean is the unit.
   C_EXP: 2, POLARITY_OVERRIDE: true, ARC_FROM_PAIR: false, OLD_COUPLING: false, OLD_STRENGTH: false, HMAX_ANY: false, // bisection switches
+  CLOG: true,         // a trench clogs (stiff contact) when the subducting plate presents buoyant crust
   C_OC: 1,            // basal drag coupling up to M_REF of lithosphere; scales as (m / M_REF)^2 beyond
   // mantle lithosphere thickness m (km): seafloor from age, continents carried per record
   M_REF: 100, M_EQ: 150, M_CRATON: 250,              // reference, ordinary continental, cratonic
@@ -629,7 +630,11 @@ function createSim(grid, prm, dyn) {
         const rec = pairs.get(pkey(p, q));
         if (!rec || time - rec.last > T_SLAB) continue;
         const sj = slotW[j];
-        const kap = K_.C_OC * (!subd(s) && !subd(sj) ? Kc : K_.K_SUB) * lEdge * 0.5; // each edge is seen from both sides
+        // stiff (collision) resistance when buoyant crust is jammed into the trench: both sides unsubductable, or the
+        // side of the pair's recorded lower plate is (a continent or plateau arriving at a subduction zone clogs it)
+        const lowerBuoyant = rec.lower === p ? !subd(s) : !subd(sj);
+        const jam = (!subd(s) && !subd(sj)) || (K_.CLOG && lowerBuoyant);
+        const kap = K_.C_OC * (jam ? Kc : K_.K_SUB) * lEdge * 0.5; // each edge is seen from both sides
         const key = p < q ? p * 4096 + q : q * 4096 + p;
         let C = contacts.get(key); if (!C) { C = new Float64Array(13); C[9] = Math.min(p, q); C[10] = Math.max(p, q); contacts.set(key, C); }
         if (kapQ[2*i] < 0 || kapQ[2*i] === q) { kapQ[2*i] = q; kapC[2*i] += kap; } else { kapQ[2*i+1] = q; kapC[2*i+1] += kap; }
