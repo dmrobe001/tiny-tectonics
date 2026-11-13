@@ -407,7 +407,7 @@ const K_ = {
   L: 6, TAU_M: 150, EPS: 0.05,                       // mantle
   TAU_HS: 100, TAU_REF: 80, T_SLAB: 10, D_ARC: 200,  // hotspots, slabs, arcs
   // Force-like constants only matter through their ratios. Drag coupling under ocean is the unit.
-  C_EXP: 2, POLARITY_OVERRIDE: true, ARC_FROM_PAIR: false,
+  C_EXP: 2, POLARITY_OVERRIDE: true, ARC_FROM_PAIR: false, OLD_COUPLING: false, OLD_STRENGTH: false, HMAX_ANY: false, // bisection switches
   C_OC: 1,            // basal drag coupling up to M_REF of lithosphere; scales as (m / M_REF)^2 beyond
   // mantle lithosphere thickness m (km): seafloor from age, continents carried per record
   M_REF: 100, M_EQ: 150, M_CRATON: 250,              // reference, ordinary continental, cratonic
@@ -466,7 +466,9 @@ function createSim(grid, prm, dyn) {
   const release = s => { Ty[s] = -1; H[s] = 0; freeList.push(s); };
   function copyRec(dst, src) { Ty[dst] = Ty[src]; H[dst] = H[src]; T0[dst] = T0[src]; D[dst] = D[src]; SA[dst] = SA[src]; ST[dst] = ST[src]; TOR[dst] = TOR[src]; KD[dst] = KD[src]; ML[dst] = ML[src]; }
   const mLith = (s, time) => Ty[s] === 1 ? ML[s] : Math.min(K_.M_OC_MAX, K_.M_OC0 + K_.K_M * Math.sqrt(Math.max(0, time - T0[s])));
-  const coupling = (s, time) => K_.C_OC * Math.max(1, (mLith(s, time) / K_.M_REF) ** K_.C_EXP); // keels deeper than M_REF couple harder
+  const coupling = (s, time) => K_.OLD_COUPLING
+    ? (Ty[s] === 1 ? K_.C_OC * (1 + 4 * Math.min(1, H[s] / H0) * Math.min(1, Math.max(0, time - T0[s]) / 300)) : K_.C_OC) // bisection only
+    : K_.C_OC * Math.max(1, (mLith(s, time) / K_.M_REF) ** K_.C_EXP); // keels deeper than M_REF couple harder
   const subd = s => Ty[s] === 0 && H[s] < H_CRIT;
   function elevS(s, time) {
     if (Ty[s] === 1) return (H[s] - H0) * ISO;
@@ -830,7 +832,7 @@ function createSim(grid, prm, dyn) {
     // continental crust onto adjacent seafloor leaked it into subduction: about 1.4 km/100 Myr, sphere-averaged.
     for (let i = 0; i < N; i++) {
       const s = slotW[i]; if (H[s] <= H_MAX) continue;
-      const same = j => owner[j] === owner[i] && Ty[slotW[j]] === Ty[s];
+      const same = j => owner[j] === owner[i] && (K_.HMAX_ANY || Ty[slotW[j]] === Ty[s]);
       let m = 0; for (let k = off[i]; k < off[i + 1]; k++) if (same(nbr[k])) m++;
       if (!m) continue;
       const ex = (H[s] - H_MAX) / m; H[s] = H_MAX;
@@ -870,6 +872,7 @@ function createSim(grid, prm, dyn) {
   }
   function strengthBase(s, time) {
     // S0(type) * (m / M_REF) * exp(-max(h - H0, 0) / H_W): thick lids are strong, thick (hot) crust is weak
+    if (K_.OLD_STRENGTH) return (Ty[s] === 1 ? 7.5e5 * (1 + 2 * Math.min(1, Math.max(0, time - TOR[s]) / 500)) : 4e6 * (1 + Math.sqrt(Math.max(0, time - T0[s]) / 10))) * dyn.strength; // bisection only
     const S0 = Ty[s] === 1 ? K_.S_CONT : K_.S_OC;
     return S0 * (mLith(s, time) / K_.M_REF) * Math.exp(-Math.max(H[s] - H0, 0) / K_.H_W) * dyn.strength;
   }
