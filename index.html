@@ -407,6 +407,7 @@ const K_ = {
   L: 6, TAU_M: 150, EPS: 0.05,                       // mantle
   TAU_HS: 100, TAU_REF: 80, T_SLAB: 10, D_ARC: 200,  // hotspots, slabs, arcs
   // Force-like constants only matter through their ratios. Drag coupling under ocean is the unit.
+  C_EXP: 2, POLARITY_OVERRIDE: true,
   C_OC: 1,            // basal drag coupling up to M_REF of lithosphere; scales as (m / M_REF)^2 beyond
   // mantle lithosphere thickness m (km): seafloor from age, continents carried per record
   M_REF: 100, M_EQ: 150, M_CRATON: 250,              // reference, ordinary continental, cratonic
@@ -465,7 +466,7 @@ function createSim(grid, prm, dyn) {
   const release = s => { Ty[s] = -1; H[s] = 0; freeList.push(s); };
   function copyRec(dst, src) { Ty[dst] = Ty[src]; H[dst] = H[src]; T0[dst] = T0[src]; D[dst] = D[src]; SA[dst] = SA[src]; ST[dst] = ST[src]; TOR[dst] = TOR[src]; KD[dst] = KD[src]; ML[dst] = ML[src]; }
   const mLith = (s, time) => Ty[s] === 1 ? ML[s] : Math.min(K_.M_OC_MAX, K_.M_OC0 + K_.K_M * Math.sqrt(Math.max(0, time - T0[s])));
-  const coupling = (s, time) => K_.C_OC * Math.max(1, (mLith(s, time) / K_.M_REF) ** 2); // keels deeper than M_REF couple harder
+  const coupling = (s, time) => K_.C_OC * Math.max(1, (mLith(s, time) / K_.M_REF) ** K_.C_EXP); // keels deeper than M_REF couple harder
   const subd = s => Ty[s] === 0 && H[s] < H_CRIT;
   function elevS(s, time) {
     if (Ty[s] === 1) return (H[s] - H0) * ISO;
@@ -761,7 +762,7 @@ function createSim(grid, prm, dyn) {
       // are subductable, which is where flicker would matter):
       //  - exactly one cell subductable: that one goes down (buoyant crust clogs the trench; polarity reversal)
       //  - neither subductable: the thinner lithosphere is consumed and its crust stacks onto the thicker one
-      if (hits === 2) {
+      if (hits === 2 && K_.POLARITY_OVERRIDE) {
         const o = 1 - up, a = subd(hitS[up]), b = subd(hitS[o]);
         if (a && !b) up = o;
         else if (!a && !b && mLith(hitS[o], time) > mLith(hitS[up], time) + 5) up = o;
