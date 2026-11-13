@@ -63,6 +63,13 @@ This replaces the time-since-event "cratonisation" ramp, the age clock in drag c
 13. **Craton loss channels after that fix** (seed 1, to 1600 Myr, refertilisation τ = 300 Myr): refertilisation 117k, rifting 94k, consumption by thicker roots 58k; half-life about 400 Myr. Refertilisation was then slowed to τ = 1000 Myr.
 14. **Rift lines favour thin lithosphere.** 75% of 456 splits (seed 1) ran through lithosphere thinner than the plate mean, at 0.87× the mean on average.
 
+15. **Open: continents erode away under the lithosphere model.** With all phase-4a changes on, continental crust falls from about 24% to 1–3% of the sphere by 1 Gyr (seeds 1 and 2). Plates speed up to 60–130 km/Myr and almost never weld. Diagnosis by bisection (seed 1, 400 Myr; every change has a switch in `K_`):
+    - All changes switched to the previous behaviour: 28.7% continental crust, 24 welds.
+    - Re-enabling a single change: strength law, drag law, arc fronts from slabs, foundering, or refertilisation and rift thinning each keep 25–29%. Plateau spreading within crust type drops it to 10% with 0 welds; the per-cell polarity override drops it to 12% with 4 welds.
+    - Interpretation: the previous slowdown and welding relied on two artifacts that clogged trenches with buoyant crust (continental spill onto seafloor; continents plastered onto overriding seafloor). Removing them removed the only brake on convergence, and continuous continental collision stacks crust and destroys area.
+    - A physical replacement, stiff contact resistance when the subducting plate presents buoyant crust ("trench clogging", `K_.CLOG`), only partly helps: 27% at 200 Myr, but 3% by 1 Gyr. Neither culprit reverted on top of clogging fixes it either (6% and 0.9%). Plate counts in failing runs climb to 90–120, against about 60 in the previous version.
+    - Not yet measured: what consumes continental area in the clogged runs. Leading guess: a rift-and-collide churn among many small continental plates.
+
 ## Untuned constants
 
 These are ratios only (spec §13), set so early plate speeds fall in 15–100 km/Myr: F_sp = 6e5, K_coll = 2e5 km, K_sub = 2e3 km, U₀ = 40 km/Myr, α = 1, β = 0.02, A_arc = 0.35 km, hotspot birth 0.6 and thickening 0.6 km/Myr. Rifting and welding: S_cont = 7.5e5 and S_oc = 1.5e7 at m = 100 km (see the lithosphere model), T_w = 0.5, k_r = 0.005 /Myr, ε = 0.15, K = 12 seeds, f_min = 0.1, v_weld = 5 km/Myr, t_weld = 20 Myr. The live "Dynamics" sliders scale slab pull, mantle flow, insulation (β), collision resistance (K_coll), and lithosphere strength (S_cont and S_oc).
