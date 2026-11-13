@@ -407,7 +407,7 @@ const K_ = {
   L: 6, TAU_M: 150, EPS: 0.05,                       // mantle
   TAU_HS: 100, TAU_REF: 80, T_SLAB: 10, D_ARC: 200,  // hotspots, slabs, arcs
   // Force-like constants only matter through their ratios. Drag coupling under ocean is the unit.
-  C_EXP: 2, POLARITY_OVERRIDE: true,
+  C_EXP: 2, POLARITY_OVERRIDE: true, ARC_FROM_PAIR: false,
   C_OC: 1,            // basal drag coupling up to M_REF of lithosphere; scales as (m / M_REF)^2 beyond
   // mantle lithosphere thickness m (km): seafloor from age, continents carried per record
   M_REF: 100, M_EQ: 150, M_CRATON: 250,              // reference, ordinary continental, cratonic
@@ -639,7 +639,7 @@ function createSim(grid, prm, dyn) {
         C[3] -= kap * ry * rx; C[4] += kap * (R2 - ry * ry); C[5] -= kap * ry * rz;
         C[6] -= kap * rz * rx; C[7] -= kap * rz * ry; C[8] += kap * (R2 - rz * rz);
         // arc front: upper plate cell next to an actively subducting lower plate
-        if (ST[sj] > time - T_SLAB && !(ST[s] > time - T_SLAB)) { // q is actively subducting here and p is not
+        if (K_.ARC_FROM_PAIR ? (rec.lower === q && ST[sj] > time - T_SLAB) : (ST[sj] > time - T_SLAB && !(ST[s] > time - T_SLAB))) {
           const wx = W[p][0] - W[q][0], wy = W[p][1] - W[q][1], wz = W[p][2] - W[q][2];
           frontVel = Math.max(frontVel, R * Math.hypot(wy * z - wz * y, wz * x - wx * z, wx * y - wy * x));
         }
