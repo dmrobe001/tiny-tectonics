@@ -153,6 +153,10 @@ dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-va
         <input type="range" id="coll" min="-1" max="1" step="0.05" value="0">
       </div>
       <div class="ctl">
+        <label for="init">Subduction initiation <output id="initOut"></output></label>
+        <input type="range" id="init" min="-1" max="1" step="0.05" value="0">
+      </div>
+      <div class="ctl">
         <label for="strength">Lithosphere strength <output id="strengthOut"></output></label>
         <input type="range" id="strength" min="-1" max="1" step="0.05" value="0">
       </div>
@@ -192,7 +196,7 @@ dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-va
         <dt>Continental crust</dt><dd id="sCont">–</dd>
         <dt>Land above sea level</dt><dd id="sLand">–</dd>
         <dt>Sea level</dt><dd id="sSea">–</dd>
-        <dt>Rifts / welds so far</dt><dd id="sRift">–</dd>
+        <dt>Rifts / welds / initiations</dt><dd id="sRift">–</dd>
         <dt>Peak line load / strength</dt><dd id="sLoad">–</dd>
         <dt>Craton area</dt><dd id="sCraton">–</dd>
         <dt>Hotspots</dt><dd id="sHot">–</dd>
@@ -202,7 +206,7 @@ dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-va
       </dl>
     </section>
 
-    <p class="note">Phase&nbsp;1–2 of the design notes: plate-frame crust, compositing with subduction polarity, arcs, erosion, a spherical-harmonic mantle, hotspots, and a torque balance (basal drag, slab pull, contact resistance) that sets every plate's spin each substep. Cratons are thick mantle-lithosphere roots seeded at the start; thick crust founders. Every 10&nbsp;Myr, plates stalled against each other weld, and each plate tests its weakest lines for rifting. Known issue: by about 1.6 Gyr most runs jam into a few slow plates.</p>
+    <p class="note">Phase&nbsp;1–2 of the design notes: plate-frame crust, compositing with subduction polarity, arcs, erosion, a spherical-harmonic mantle, hotspots, and a torque balance (basal drag, slab pull, contact resistance) that sets every plate's spin each substep. Cratons are thick mantle-lithosphere roots seeded at the start; thick crust founders. Every 10&nbsp;Myr, plates stalled against each other weld, each plate tests its weakest lines for rifting, and old passive margins may start subducting. Known issue: by about 1.6 Gyr most runs jam into a few slow plates.</p>
     <p class="hint">Drag to orbit · scroll or pinch to zoom · <kbd>Space</kbd> pause · <kbd>H</kbd> hide panel</p>
   </aside>
 </div>
@@ -440,6 +444,8 @@ const K_ = {
   RIFT_MIN_CELLS: 60, RIFT_MIN_FRAC: 0.02,
   OVER_CAP: 5,        // cap on the fractional overload driving damage growth
   V_WELD: 5, T_WELD: 20,
+  INIT_RATE: 2.5e-6,  // passive-margin subduction initiation, per km of margin per Myr at unit age factor
+  INIT_AGE: 60, INIT_SCALE: 60, // age factor max(0, (age - INIT_AGE) / INIT_SCALE), age of the margin seafloor in Myr
   WELD_MAX_FRAC: 0.5,  // deviation: no weld may create a plate covering more than this fraction of the sphere
   MAX_PLATES: 128,
 };
@@ -1045,6 +1051,58 @@ function createSim(grid, prm, dyn) {
     sim.welds++;
   }
 
+  // ----- subduction initiation at old passive margins (addition, not in spec) -----
+  // Margin cells: seafloor next to continental crust of the same plate. Removing them separates every continental
+  // block from its seafloor. Each block initiates at rate INIT_RATE * L * max(0, (age - INIT_AGE) / INIT_SCALE),
+  // with L the margin length and age the margin seafloor's mean age; the block becomes its own plate, the seafloor
+  // side is recorded as the lower plate, and its margin cells get slab flags so slab pull can start subduction.
+  sim.initiations = 0;
+  function initiatePlate(p, time) {
+    const cellsP = []; for (let i = 0; i < N; i++) if (owner[i] === p) { loc[i] = cellsP.length; cellsP.push(i); }
+    const n = cellsP.length, cleanup = () => { for (const i of cellsP) loc[i] = -1; };
+    const minCells = Math.max(K_.RIFT_MIN_CELLS, K_.RIFT_MIN_FRAC * N);
+    if (n < 2 * minCells) return cleanup();
+    const cont = v => Ty[slotW[cellsP[v]]] === 1;
+    let total = 0; for (const i of cellsP) total += area[i];
+    const comp = new Int32Array(n).fill(-1), blocks = [];
+    for (let v0 = 0; v0 < n; v0++) {
+      if (comp[v0] >= 0 || !cont(v0)) continue;
+      const id = blocks.length, stack = [v0], cells = [], margin = new Set(); comp[v0] = id; let A = 0;
+      while (stack.length) { const v = stack.pop(), i = cellsP[v]; cells.push(v); A += area[i];
+        for (let e = off[i]; e < off[i + 1]; e++) { const u = loc[nbr[e]]; if (u < 0) continue;
+          if (cont(u)) { if (comp[u] < 0) { comp[u] = id; stack.push(u); } } else margin.add(u); } }
+      blocks.push({ cells, margin: [...margin], A });
+    }
+    for (const b of blocks) {
+      let Am = 0, age = 0; for (const v of b.margin) { const i = cellsP[v]; Am += area[i]; age += time - T0[slotW[i]]; }
+      if (!b.margin.length) continue;
+      age /= b.margin.length;
+      const rest = total - b.A;
+      if (b.cells.length < minCells || b.A < K_.F_MIN * total || rest < K_.F_MIN * total || n - b.cells.length < minCells) continue;
+      const f = Math.max(0, (age - K_.INIT_AGE) / K_.INIT_SCALE);
+      const prob = 1 - Math.exp(-K_.INIT_RATE * dyn.init * b.margin.length * sKm * f * K_.DT_R);
+      if (rng() >= prob) continue;
+      // split: the block becomes a new plate with the same orientation (no resampling)
+      const np = freePlateSlot(); if (np < 0) break;
+      const inBlock = lab; for (const v of b.cells) inBlock[cellsP[v]] = 3;
+      const Rp = qmat(plates[p].q, new Float64Array(9)), ip = plates[p].idx, inew = plates[np].idx;
+      for (let r = 0; r < N; r++) {
+        const t = ip[r]; if (t === -1) continue;
+        const bx = pos[3*r], by = pos[3*r+1], bz = pos[3*r+2];
+        const w = locate(Rp[0]*bx + Rp[1]*by + Rp[2]*bz, Rp[3]*bx + Rp[4]*by + Rp[5]*bz, Rp[6]*bx + Rp[7]*by + Rp[8]*bz);
+        if (owner[w] === p && inBlock[w] === 3) { inew[r] = t; ip[r] = -1; }
+      }
+      for (const v of b.cells) { const i = cellsP[v]; owner[i] = np; inBlock[i] = 0; }
+      Object.assign(plates[np], { q: plates[p].q.slice(), w: plates[p].w.slice(), cells: b.cells.length, slab: false, touched: true });
+      plates[p].cells -= b.cells.length; plates[p].touched = true;
+      pairs.set(pkey(p, np), { lower: p, last: time });
+      for (const v of b.margin) { const s = slotW[cellsP[v]]; ST[s] = time; SA[s] = time - T0[s]; }
+      sim.initiations++; sim.initLog = sim.initLog || []; sim.initLog.push({ t: time, p, np, age, L: b.margin.length * sKm });
+      break; // at most one initiation per plate per check
+    }
+    cleanup();
+  }
+
   function tectonicEvents(time) {
     for (const [key, rec] of [...pairs]) {
       if (rec.slowSince === undefined || time - rec.slowSince < K_.T_WELD) continue;
@@ -1058,6 +1116,7 @@ function createSim(grid, prm, dyn) {
     const P = plates.length, fresh = plates.map(pl => pl.cells > 0 && !pl.touched);
     for (const pl of plates) pl.touched = false;
     for (let p = 0; p < P; p++) if (fresh[p] && !plates[p].touched) riftPlate(p, time);
+    for (let p = 0; p < P; p++) if (fresh[p] && !plates[p].touched && plates[p].cells) initiatePlate(p, time);
   }
 
   sim.strengthAt = i => strength(i, slotW[i], sim.time);
@@ -1261,7 +1320,7 @@ function draw() {
 // ---------- app state ----------
 const $ = id => document.getElementById(id);
 const ui = { view: 'elev', bounds: false, arrows: true, hotspots: true, playing: true, dt: 2 };
-const dyn = { slab: 1, flow: 1, insul: 1, coll: 1, strength: 1, ocean: 2.6 };
+const dyn = { slab: 1, flow: 1, insul: 1, coll: 1, strength: 1, init: 1, ocean: 2.6 };
 let grid = null, sim = null, F = null, stepMs = 0, dirty = true, arrowGrid = null;
 function readWorldParams() { return { f: +$('res').value, contFrac: +$('cont').value, cratonFrac: +$('craton').value, plates: +$('plates').value, radius: +$('radius').value, seed: Math.floor(+$('seed').value) || 1 }; }
 let applied = null;
@@ -1367,7 +1426,7 @@ function updateTextures() {
   $('sSea').textContent = `${sea >= 0 ? '+' : '−'}${Math.abs(sea).toFixed(2)} km`;
   $('sHot').textContent = sim.hotspots.length;
   $('sCraton').textContent = `${(100 * craton / A4).toFixed(1)} % of sphere`;
-  $('sRift').textContent = `${sim.rifts} / ${sim.welds}`;
+  $('sRift').textContent = `${sim.rifts} / ${sim.welds} / ${sim.initiations}`;
   $('sLoad').textContent = sim.overload ? sim.overload.toFixed(2) : '–';
   $('sHeal').textContent = sim.lastSub ? nf.format(sim.healed) : '–';
   $('sSub').textContent = sim.lastSub || '–';
@@ -1404,11 +1463,11 @@ function fmtOutputs() {
   $('cratonOut').textContent = `${Math.round(+$('craton').value * 100)} %`;
   $('radiusOut').textContent = `${nf.format(R)} km`;
   $('dtOut').textContent = `${(+$('dt').value).toFixed(2)} Myr`;
-  for (const id of ['slab', 'flow', 'insul', 'coll', 'strength']) { dyn[id] = mult(id); $(id + 'Out').textContent = `×${dyn[id].toFixed(2)}`; }
+  for (const id of ['slab', 'flow', 'insul', 'coll', 'strength', 'init']) { dyn[id] = mult(id); $(id + 'Out').textContent = `×${dyn[id].toFixed(2)}`; }
   dyn.ocean = +$('ocean').value; $('oceanOut').textContent = `${dyn.ocean.toFixed(2)} km mean depth`;
 }
 ['res', 'cont', 'craton', 'plates', 'radius', 'seed'].forEach(id => $(id).addEventListener('input', () => { fmtOutputs(); markPending(); }));
-['slab', 'flow', 'insul', 'coll', 'strength', 'ocean'].forEach(id => $(id).addEventListener('input', () => { fmtOutputs(); dirty = true; }));
+['slab', 'flow', 'insul', 'coll', 'strength', 'init', 'ocean'].forEach(id => $(id).addEventListener('input', () => { fmtOutputs(); dirty = true; }));
 $('dt').addEventListener('input', () => { ui.dt = +$('dt').value; fmtOutputs(); });
 $('reseed').addEventListener('click', () => { $('seed').value = 1 + Math.floor(Math.random() * 99999); resetWorld(); });
 $('reset').addEventListener('click', resetWorld);
