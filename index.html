@@ -114,6 +114,10 @@ dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-va
         <input type="range" id="cont" min="0.05" max="0.7" step="0.01" value="0.3">
       </div>
       <div class="ctl">
+        <label for="craton">Craton share of continents <output id="cratonOut"></output></label>
+        <input type="range" id="craton" min="0" max="0.6" step="0.01" value="0.25">
+      </div>
+      <div class="ctl">
         <label for="plates">Plates <output id="platesOut"></output></label>
         <input type="range" id="plates" min="3" max="24" step="1" value="12">
       </div>
@@ -169,6 +173,7 @@ dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-va
         <button type="button" data-view="damage" aria-pressed="false">Damage</button>
         <button type="button" data-view="history" aria-pressed="false">Tectonic history</button>
         <button type="button" data-view="strength" aria-pressed="false">Strength</button>
+        <button type="button" data-view="lith" aria-pressed="false">Lithosphere thickness</button>
       </div>
       <label class="check"><input type="checkbox" id="arrows" checked> Plate velocity arrows</label>
       <label class="check"><input type="checkbox" id="bounds"> Outline plate boundaries</label>
@@ -189,6 +194,7 @@ dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-va
         <dt>Sea level</dt><dd id="sSea">–</dd>
         <dt>Rifts / welds so far</dt><dd id="sRift">–</dd>
         <dt>Peak line load / strength</dt><dd id="sLoad">–</dd>
+        <dt>Craton area</dt><dd id="sCraton">–</dd>
         <dt>Hotspots</dt><dd id="sHot">–</dd>
         <dt>Pinholes healed / step</dt><dd id="sHeal">–</dd>
         <dt>Substeps per step</dt><dd id="sSub">–</dd>
@@ -196,7 +202,7 @@ dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-va
       </dl>
     </section>
 
-    <p class="note">Phase&nbsp;1–2 of the design notes: plate-frame crust, compositing with subduction polarity, arcs, erosion, a spherical-harmonic mantle, hotspots, and a torque balance (basal drag, slab pull, contact resistance) that sets every plate's spin each substep. Every 10&nbsp;Myr, plates stalled against each other weld, and each plate tests its weakest lines for rifting. Known issue: by about 2 Gyr most runs settle into two slow hemispheric plates.</p>
+    <p class="note">Phase&nbsp;1–2 of the design notes: plate-frame crust, compositing with subduction polarity, arcs, erosion, a spherical-harmonic mantle, hotspots, and a torque balance (basal drag, slab pull, contact resistance) that sets every plate's spin each substep. Cratons are thick mantle-lithosphere roots seeded at the start; thick crust founders. Every 10&nbsp;Myr, plates stalled against each other weld, and each plate tests its weakest lines for rifting. Known issue: by about 2 Gyr most runs settle into two slow hemispheric plates.</p>
     <p class="hint">Drag to orbit · scroll or pinch to zoom · <kbd>Space</kbd> pause · <kbd>H</kbd> hide panel</p>
   </aside>
 </div>
@@ -401,7 +407,16 @@ const K_ = {
   L: 6, TAU_M: 150, EPS: 0.05,                       // mantle
   TAU_HS: 100, TAU_REF: 80, T_SLAB: 10, D_ARC: 200,  // hotspots, slabs, arcs
   // Force-like constants only matter through their ratios. Drag coupling under ocean is the unit.
-  C_OC: 1, C_ROOT: 4, TAU_ROOT: 300,                 // continental roots couple up to (1 + C_ROOT)x harder
+  C_OC: 1,            // basal drag coupling under 100 km of lithosphere; scales as (m / M_REF)^2
+  // mantle lithosphere thickness m (km): seafloor from age, continents carried per record
+  M_REF: 100, M_EQ: 150, M_CRATON: 250,              // reference, ordinary continental, cratonic
+  M_OC0: 10, K_M: 9, M_OC_MAX: 100,                  // seafloor m = min(M_OC_MAX, M_OC0 + K_M sqrt(age))
+  CRATON_TAPER: 300,                                 // km over which a craton root tapers to M_EQ at its edge
+  TAU_MREG: 200,      // thinned continental lithosphere regrows toward M_EQ (never beyond it)
+  TAU_REFERT: 1000,   // a root above M_EQ decays toward M_EQ while a slab is active beneath it
+  RIFT_THIN: 0.5,     // m is multiplied by this on a rift line and its margin
+  H_F: 60, TAU_F: 30, // crust below H_F founders (eclogite) and is lost, timescale TAU_F
+  H_W: 15,            // km of crust above H0 that weakens lithosphere by a factor e (hot, quartz-rich)
   F_SP: 6e5,          // slab pull per unit trench length, in units of C_OC * km^2/Myr
   K_COLL: 5e4,        // contact resistance per unit contact length (km), continental collision
   K_SUB: 2e3,         //   ... and at subduction contacts
@@ -409,15 +424,12 @@ const K_ = {
   ALPHA: 1.0,         // mantle cooling per unit area subducted
   BETA: 0.1,          // mantle warming per unit area of continent per Myr (0.02 never warmed enough to break a supercontinent)
   A_ARC: 0.35,        // km: arc volume per unit trench length per km of convergence (5% of subducted h_oc)
-  A_SE: 0.35,         // km: subduction erosion of continental upper plates, per km of convergence (addition)
   HS_BIRTH: 0.6,      // hotspot births per Myr per unit of area-weighted max(T,0) (unit sphere / 4pi)
   HS_RATE: 0.6,       // km/Myr of thickening above a hotspot
   D_COLL: 0.3,        // damage added per collision event
   // rifting and welding (spec sections 9-10); strengths are forces per unit length, same units as F_SP
-  S_CONT: 7.5e5,      // continental base strength, young
-  CRATON: 2,          //   ... rising to (1 + CRATON)x after TAU_CRATON without events
-  TAU_CRATON: 500,
-  S_OC: 4e6,          // oceanic base strength at age 0, growing with sqrt(age / 10 Myr)
+  S_CONT: 7.5e5,      // continental strength at m = M_REF and h = H0
+  S_OC: 1.5e7,        // oceanic strength at m = M_REF (no weak quartz-rich crust)
   T_W: 0.5,           // mantle temperature (model units) that weakens by a factor e
   DT_R: 10, K_SEEDS: 12, F_MIN: 0.1,
   K_R: 0.005,         // damage growth rate per unit fractional overload, 1/Myr
@@ -440,18 +452,20 @@ function createSim(grid, prm, dyn) {
   // ----- crust record pool; each plate holds an index from plate-frame cell to record -----
   let cap = Math.ceil(N * 1.6), top = 0;
   let Ty = new Int8Array(cap).fill(-1), H = new Float32Array(cap), T0 = new Float32Array(cap), D = new Float32Array(cap), SA = new Float32Array(cap), ST = new Float32Array(cap);
+  let ML = new Float32Array(cap); // mantle lithosphere thickness, continental records only
   let TOR = new Float32Array(cap), KD = new Int8Array(cap); // time and kind of last event: 0 none, 1 collision, 2 rift, 3 suture
   const freeList = [];
   function growPool() {
     cap *= 2; const g = (A, C) => { const n = new C(cap); n.set(A); return n; };
     const ty = new Int8Array(cap).fill(-1); ty.set(Ty); Ty = ty;
     H = g(H, Float32Array); T0 = g(T0, Float32Array); D = g(D, Float32Array); SA = g(SA, Float32Array); ST = g(ST, Float32Array);
-    TOR = g(TOR, Float32Array); KD = g(KD, Int8Array);
+    TOR = g(TOR, Float32Array); KD = g(KD, Int8Array); ML = g(ML, Float32Array);
   }
   const alloc = () => { if (freeList.length) return freeList.pop(); if (top >= cap) growPool(); return top++; };
   const release = s => { Ty[s] = -1; H[s] = 0; freeList.push(s); };
-  function copyRec(dst, src) { Ty[dst] = Ty[src]; H[dst] = H[src]; T0[dst] = T0[src]; D[dst] = D[src]; SA[dst] = SA[src]; ST[dst] = ST[src]; TOR[dst] = TOR[src]; KD[dst] = KD[src]; }
-  const coupling = (s, time) => Ty[s] === 1 ? K_.C_OC * (1 + K_.C_ROOT * Math.min(1, H[s] / H0) * Math.min(1, Math.max(0, time - T0[s]) / K_.TAU_ROOT)) : K_.C_OC;
+  function copyRec(dst, src) { Ty[dst] = Ty[src]; H[dst] = H[src]; T0[dst] = T0[src]; D[dst] = D[src]; SA[dst] = SA[src]; ST[dst] = ST[src]; TOR[dst] = TOR[src]; KD[dst] = KD[src]; ML[dst] = ML[src]; }
+  const mLith = (s, time) => Ty[s] === 1 ? ML[s] : Math.min(K_.M_OC_MAX, K_.M_OC0 + K_.K_M * Math.sqrt(Math.max(0, time - T0[s])));
+  const coupling = (s, time) => K_.C_OC * Math.max(0.3, (mLith(s, time) / K_.M_REF) ** 2); // deeper keels couple harder
   const subd = s => Ty[s] === 0 && H[s] < H_CRIT;
   function elevS(s, time) {
     if (Ty[s] === 1) return (H[s] - H0) * ISO;
@@ -459,7 +473,7 @@ function createSim(grid, prm, dyn) {
   }
 
   // ----- initial conditions: randomised flood fill (noisy multi-source Dijkstra) -----
-  function grow(seeds, rates, label, limit) {
+  function grow(seeds, rates, label, limit, allow) {
     const hcap = off[N] + seeds.length + 8;
     const hc = new Float64Array(hcap), hv = new Int32Array(hcap), hl = new Int32Array(hcap); let hn = 0;
     const push = (c, v, l) => { let k = hn++; while (k > 0) { const p = (k - 1) >> 1; if (hc[p] <= c) break; hc[k] = hc[p]; hv[k] = hv[p]; hl[k] = hl[p]; k = p; } hc[k] = c; hv[k] = v; hl[k] = l; };
@@ -473,7 +487,7 @@ function createSim(grid, prm, dyn) {
       if (label[v] >= 0) continue;
       label[v] = l; count++;
       for (let k = off[v]; k < off[v + 1]; k++) {
-        const u = nbr[k]; if (label[u] >= 0) continue;
+        const u = nbr[k]; if (label[u] >= 0 || (allow && !allow(u))) continue;
         push(c + Math.exp(0.8 * noiseA(pos[3*u], pos[3*u+1], pos[3*u+2])) * (0.5 + rng()) / rates[l], u, l);
       }
     }
@@ -485,6 +499,20 @@ function createSim(grid, prm, dyn) {
   const contLabel = new Int16Array(N).fill(-1);
   const K = 2 + Math.floor(rng() * 5);
   grow(pick(K), Array.from({ length: K }, () => Math.exp(0.35 * gauss(rng))), contLabel, Math.round(prm.contFrac * N));
+  // cratons: a Poisson number of root patches (mean 2, at least 1 if any share is asked) covering cratonFrac of the
+  // initial continental area. This is the one part of the initial condition the model is meant to remember.
+  const cratonLabel = new Int16Array(N).fill(-1), rootW = new Float32Array(N);
+  const contCells = []; for (let i = 0; i < N; i++) if (contLabel[i] >= 0) contCells.push(i);
+  if (prm.cratonFrac > 0 && contCells.length) {
+    let nc = 0, L = Math.exp(-2), pp = rng(); while (pp > L) { nc++; pp *= rng(); } nc = Math.max(1, nc);
+    const seedsC = new Set(); while (seedsC.size < Math.min(nc, contCells.length)) seedsC.add(contCells[Math.floor(rng() * contCells.length)]);
+    grow([...seedsC], [...seedsC].map(() => Math.exp(0.5 * gauss(rng))), cratonLabel, Math.round(prm.cratonFrac * contCells.length), u => contLabel[u] >= 0);
+    // taper: distance (km) inside the patch from its edge
+    const dist = new Float32Array(N).fill(-1), q = [];
+    for (let i = 0; i < N; i++) if (cratonLabel[i] >= 0) for (let k = off[i]; k < off[i + 1]; k++) if (cratonLabel[nbr[k]] < 0) { dist[i] = 0; q.push(i); break; }
+    for (let h = 0; h < q.length; h++) { const i = q[h]; for (let k = off[i]; k < off[i + 1]; k++) { const j = nbr[k]; if (cratonLabel[j] >= 0 && dist[j] < 0) { dist[j] = dist[i] + sKm; q.push(j); } } }
+    for (let i = 0; i < N; i++) if (cratonLabel[i] >= 0) rootW[i] = Math.min(1, (dist[i] + 0.5 * sKm) / K_.CRATON_TAPER);
+  }
 
   const plates = [];
   for (let p = 0; p < P0; p++) plates.push({ idx: new Int32Array(N).fill(-1), q: [0, 0, 0, 1], w: [0, 0, 0], cells: 0, slab: false });
@@ -494,6 +522,7 @@ function createSim(grid, prm, dyn) {
     if (contLabel[i] >= 0) { Ty[s] = 1; H[s] = H0 + 2.5 * noiseB(x, y, z); T0[s] = -(900 + 300 * noiseC(x, y, z)); }
     else { Ty[s] = 0; H[s] = H_OC; T0[s] = -Math.min(180, Math.max(1, 70 + 45 * noiseC(x, y, z))); }
     D[s] = 0; SA[s] = 0; ST[s] = -1e9; TOR[s] = T0[s]; KD[s] = 0;
+    ML[s] = Ty[s] === 1 ? K_.M_EQ + (K_.M_CRATON - K_.M_EQ) * rootW[i] : 0;
     plates[p].idx[i] = s; ref[i] = i; slotW[i] = s; plates[p].cells++;
   }
 
@@ -674,16 +703,15 @@ function createSim(grid, prm, dyn) {
   const KH = Math.max(0, Math.ceil(2 * K_.D_ARC / sKm)), gArc = new Float64Array(KH + 1);
   { let ws = 0; for (let k = 0; k <= KH; k++) { gArc[k] = Math.exp(-(((k * sKm - K_.D_ARC) / (0.5 * K_.D_ARC)) ** 2)); ws += gArc[k]; } for (let k = 0; k <= KH; k++) gArc[k] /= ws * sKm; }
   function arcs(h) {
-    stamp++; let head = 0, tail = 0;
+    stamp++; let head = 0, tail = 0; const erf = Math.exp(-h / K_.TAU_REFERT);
     const need = nFront * 8 + N; if (bq.length < need) { bq = new Int32Array(need); bk = new Int32Array(need); bv = new Float32Array(need); }
     for (let f = 0; f < nFront; f++) { const i = fronts[f]; if (visit[i] === stamp) continue; visit[i] = stamp; bq[tail] = i; bk[tail] = 0; bv[tail++] = frontV[f]; }
     while (head < tail) {
       const i = bq[head], k = bk[head], v = bv[head++], s = slotW[i], p = owner[i];
       const dh = K_.A_ARC * v * gArc[k] * h;
       H[s] += dh; D[s] = Math.min(1, D[s] + dh / H_OC);
-      // Addition (not in spec): subduction erosion removes continental crust at the front cell at A_SE * v per
-      // unit trench length, so continental margins roughly break even and net growth comes from oceanic arcs.
-      if (k === 0 && Ty[s] === 1) H[s] = Math.max(H_OC, H[s] - K_.A_SE * v * h / sKm);
+      // a cratonic root above an active slab is refertilised by slab fluids and decays toward M_EQ
+      if (Ty[s] === 1 && ML[s] > K_.M_EQ) ML[s] = K_.M_EQ + (ML[s] - K_.M_EQ) * erf;
       if (k >= KH) continue;
       for (let e = off[i]; e < off[i + 1]; e++) { const j = nbr[e]; if (visit[j] === stamp || owner[j] !== p) continue; visit[j] = stamp; bq[tail] = j; bk[tail] = k + 1; bv[tail++] = v; }
     }
@@ -729,6 +757,15 @@ function createSim(grid, prm, dyn) {
       // overlap: pick the upper plate pairwise, using recorded polarity where it exists
       let up = 0;
       for (let k = 1; k < hits; k++) if (pairLower(hitP[up], hitS[up], hitP[k], hitS[k], time) === hitP[up]) up = k;
+      // Per-cell overrides of the pair polarity (the spec uses pair polarity everywhere; it is kept only where both cells
+      // are subductable, which is where flicker would matter):
+      //  - exactly one cell subductable: that one goes down (buoyant crust clogs the trench; polarity reversal)
+      //  - neither subductable: the thinner lithosphere is consumed and its crust stacks onto the thicker one
+      if (hits === 2) {
+        const o = 1 - up, a = subd(hitS[up]), b = subd(hitS[o]);
+        if (a && !b) up = o;
+        else if (!a && !b && mLith(hitS[o], time) > mLith(hitS[up], time) + 5) up = o;
+      }
       const p = hitP[up], su = hitS[up];
       for (let k = 0; k < hits; k++) {
         if (k === up) continue;
@@ -737,7 +774,7 @@ function createSim(grid, prm, dyn) {
         if (subd(sl)) { subCount[i] += 1; events.push(i, q, time - T0[sl]); }
         else { // accretion or collision: conserve volume onto the upper cell
           H[su] += H[sl]; D[su] = Math.min(1, D[su] + K_.D_COLL); TOR[su] = time; KD[su] = 1;
-          if (Ty[su] === 0 && H[su] > H_CRIT) Ty[su] = 1;
+          if (Ty[su] === 0 && H[su] > H_CRIT) { ML[su] = mLith(su, time); Ty[su] = 1; } // m does not stack: the lower plate's mantle part sinks with its slab
         }
         plates[q].idx[hitR[k]] = -2; release(sl); // tombstone: consumed crust must not be healed back
       }
@@ -784,6 +821,10 @@ function createSim(grid, prm, dyn) {
       if (m) { const g = loss / m; for (let k = off[i]; k < off[i + 1]; k++) { const j = nbr[k]; if (owner[j] === owner[i] && H[slotW[j]] < hNew) dH[j] += g; } }
     }
     for (let i = 0; i < N; i++) if (dH[i] !== 0) H[slotW[i]] += dH[i];
+    // crust below H_F founders as dense eclogite and is lost (exact relaxation); a volume sink tied to collisions
+    const ef = Math.exp(-h / K_.TAU_F), er = Math.exp(-h / K_.TAU_MREG);
+    for (let i = 0; i < N; i++) { const s = slotW[i]; if (H[s] > K_.H_F) H[s] = K_.H_F + (H[s] - K_.H_F) * ef; }
+    for (let s = 0; s < top; s++) if (Ty[s] === 1 && ML[s] < K_.M_EQ) ML[s] = K_.M_EQ + (ML[s] - K_.M_EQ) * er; // regrowth, never past M_EQ
     for (let i = 0; i < N; i++) { // spread thickness above H_MAX to same-plate neighbours
       const s = slotW[i]; if (H[s] <= H_MAX) continue;
       let m = 0; for (let k = off[i]; k < off[i + 1]; k++) if (owner[nbr[k]] === owner[i]) m++;
@@ -824,9 +865,9 @@ function createSim(grid, prm, dyn) {
     out[o] = tx; out[o+1] = ty; out[o+2] = tz;
   }
   function strengthBase(s, time) {
-    const b = Ty[s] === 1 ? K_.S_CONT * (1 + K_.CRATON * Math.min(1, Math.max(0, time - TOR[s]) / K_.TAU_CRATON))
-                          : K_.S_OC * (1 + Math.sqrt(Math.max(0, time - T0[s]) / 10));
-    return b * dyn.strength;
+    // S0(type) * (m / M_REF) * exp(-max(h - H0, 0) / H_W): thick lids are strong, thick (hot) crust is weak
+    const S0 = Ty[s] === 1 ? K_.S_CONT : K_.S_OC;
+    return S0 * (mLith(s, time) / K_.M_REF) * Math.exp(-Math.max(H[s] - H0, 0) / K_.H_W) * dyn.strength;
   }
   const strength = (i, s, time) => strengthBase(s, time) * (1 - D[s]) * Math.exp(-Math.max(Tw[i], 0) / K_.T_W);
 
@@ -944,8 +985,10 @@ function createSim(grid, prm, dyn) {
     for (const i of cellsP) side[i] = 1;
     for (let v = 0; v < cellsP.length; v++) if (best.comp[v] >= 0 && best.comp[v] !== best.big) side[cellsP[v]] = 2;
     // rifted margin: the line and its B-side neighbours
-    for (const v of best.path) { const i = cellsP[v]; for (let e = off[i] - 1; e < off[i + 1]; e++) {
-      const j = e < off[i] ? i : nbr[e]; if (owner[j] !== p) continue; const s = slotW[j]; KD[s] = 2; TOR[s] = time; } }
+    let mLine = 0, mPlate = 0; for (const v of best.path) mLine += mLith(slotW[cellsP[v]], time); for (const i of cellsP) mPlate += mLith(slotW[i], time);
+    const margin = new Set();
+    for (const v of best.path) { const i = cellsP[v]; margin.add(i); for (let e = off[i]; e < off[i + 1]; e++) if (owner[nbr[e]] === p) margin.add(nbr[e]); }
+    for (const j of margin) { const s = slotW[j]; KD[s] = 2; TOR[s] = time; if (Ty[s] === 1) ML[s] *= K_.RIFT_THIN; } // stretching thins the lid
     // move plate-frame records whose world image lies on side B (same orientation, so no resampling)
     const Rp = qmat(plates[p].q, new Float64Array(9)), ip = plates[p].idx, inew = plates[np].idx;
     for (let r = 0; r < N; r++) {
@@ -956,10 +999,10 @@ function createSim(grid, prm, dyn) {
     }
     let nB = 0; for (const i of cellsP) if (side[i] === 2) { owner[i] = np; nB++; }
     for (const i of cellsP) side[i] = 0;
+    sim.rifts++; sim.riftLog.push({ t: time, p, np, cells: nB, mLine: mLine / best.path.length, mPlate: mPlate / cellsP.length });
     Object.assign(plates[np], { q: plates[p].q.slice(), w: plates[p].w.slice(), cells: nB, slab: false, touched: true });
     plates[p].touched = true;
     plates[p].cells -= nB;
-    sim.rifts++; sim.riftLog.push({ t: time, p, np, cells: nB });
   }
 
   function weld(p, q, time) { // q merges into p
@@ -1043,7 +1086,7 @@ function createSim(grid, prm, dyn) {
     const t = sim.time;
     for (let i = 0; i < N; i++) {
       const s = slotW[i];
-      out.E[i] = elevS(s, t); out.H[i] = H[s]; out.age[i] = t - T0[s]; out.type[i] = Ty[s]; out.D[i] = D[s]; out.kind[i] = KD[s]; out.since[i] = t - TOR[s];
+      out.E[i] = elevS(s, t); out.H[i] = H[s]; out.age[i] = t - T0[s]; out.type[i] = Ty[s]; out.D[i] = D[s]; out.kind[i] = KD[s]; out.since[i] = t - TOR[s]; out.m[i] = mLith(s, t);
     }
     const target = dyn.ocean * 4 * Math.PI; let lo = -15, hi = 15;
     for (let it = 0; it < 40; it++) {
@@ -1067,6 +1110,7 @@ const CM = {
   thick: ramp([[0, '#14182a'], [7, '#24466c'], [15, '#3f7d8a'], [25, '#7fae7a'], [35, '#d8c57a'], [50, '#e2803d'], [70, '#f4efe4']]),
   mantle: ramp([[-1, '#2b4c9b'], [-0.5, '#5f86c4'], [0, '#e9e4dc'], [0.5, '#e2894f'], [1, '#a8262a']]),
   strength: ramp([[0, '#3a1420'], [0.3, '#8a3b3b'], [0.6, '#c9925a'], [0.85, '#d9d6c7'], [1, '#f4f2ea']]),
+  lith: ramp([[0, '#2a1830'], [50, '#4a3f7a'], [100, '#3f7f9a'], [150, '#8fb98a'], [200, '#e0c070'], [250, '#f6eedb']]),
   damage: ramp([[0, '#1c2230'], [0.25, '#4b3d6e'], [0.5, '#a3487a'], [0.75, '#ec7d4f'], [1, '#fbe27a']]),
 };
 function sample(map, v, out, o) {
@@ -1205,7 +1249,7 @@ const $ = id => document.getElementById(id);
 const ui = { view: 'elev', bounds: false, arrows: true, hotspots: true, playing: true, dt: 2 };
 const dyn = { slab: 1, flow: 1, insul: 1, coll: 1, strength: 1, ocean: 2.6 };
 let grid = null, sim = null, F = null, stepMs = 0, dirty = true, arrowGrid = null;
-function readWorldParams() { return { f: +$('res').value, contFrac: +$('cont').value, plates: +$('plates').value, radius: +$('radius').value, seed: Math.floor(+$('seed').value) || 1 }; }
+function readWorldParams() { return { f: +$('res').value, contFrac: +$('cont').value, cratonFrac: +$('craton').value, plates: +$('plates').value, radius: +$('radius').value, seed: Math.floor(+$('seed').value) || 1 }; }
 let applied = null;
 
 function resetWorld() {
@@ -1214,7 +1258,7 @@ function resetWorld() {
   if (!applied || applied.f !== prm.f) buildMesh(grid);
   sim = createSim(grid, prm, dyn);
   const N = grid.N;
-  F = { E: new Float32Array(N), H: new Float32Array(N), age: new Float32Array(N), type: new Int8Array(N), D: new Float32Array(N), kind: new Int8Array(N), since: new Float32Array(N), sea: 0 };
+  F = { E: new Float32Array(N), H: new Float32Array(N), age: new Float32Array(N), type: new Int8Array(N), D: new Float32Array(N), kind: new Int8Array(N), since: new Float32Array(N), m: new Float32Array(N), sea: 0 };
   arrowGrid = buildGrid(10);
   applied = prm; dirty = true; stepMs = 0;
   markPending();
@@ -1249,16 +1293,17 @@ function updateTextures() {
   sim.fields(F);
   const own = sim.owner, Tm = sim.mantleT, sea = F.sea;
   let tRms = 0; for (let i = 0; i < N; i++) tRms += Tm[i] * Tm[i] * area[i]; tRms = Math.sqrt(tRms / (4 * Math.PI)) || 1;
-  let cont = 0, land = 0;
+  let cont = 0, land = 0, craton = 0;
   for (let i = 0; i < N; i++) {
     const o = 4 * i, h = F.E[i] - sea, cc = F.type[i] === 1;
-    if (cc) cont += area[i]; if (h > 0) land += area[i];
+    if (cc) cont += area[i]; if (h > 0) land += area[i]; if (cc && F.m[i] > K_.M_EQ + 20) craton += area[i];
     switch (ui.view) {
       case 'elev': sample(h < 0 ? CM.ocean : CM.land, h, colorBuf, o); break;
       case 'age': if (cc) { colorBuf[o] = 128; colorBuf[o+1] = 124; colorBuf[o+2] = 116; } else sample(CM.age, F.age[i], colorBuf, o); break;
       case 'thick': sample(CM.thick, F.H[i], colorBuf, o); break;
       case 'mantle': sample(CM.mantle, Tm[i] / (2 * tRms), colorBuf, o); if (cc) { colorBuf[o] *= 0.8; colorBuf[o+1] *= 0.8; colorBuf[o+2] *= 0.8; } break;
       case 'damage': sample(CM.damage, F.D[i], colorBuf, o); break;
+      case 'lith': sample(CM.lith, F.m[i], colorBuf, o); break;
       case 'history': { // kind of last event, fading with time since it
         const k = F.kind[i], f = k ? Math.exp(-F.since[i] / 400) : 0, base = cc ? 92 : 38, c = HIST[k];
         colorBuf[o] = base + (c[0] - base) * f; colorBuf[o+1] = base + (c[1] - base) * f; colorBuf[o+2] = base + (c[2] - base) * f; break; }
@@ -1307,6 +1352,7 @@ function updateTextures() {
   $('sLand').textContent = `${(100 * land / A4).toFixed(1)} %`;
   $('sSea').textContent = `${sea >= 0 ? '+' : '−'}${Math.abs(sea).toFixed(2)} km`;
   $('sHot').textContent = sim.hotspots.length;
+  $('sCraton').textContent = `${(100 * craton / A4).toFixed(1)} % of sphere`;
   $('sRift').textContent = `${sim.rifts} / ${sim.welds}`;
   $('sLoad').textContent = sim.overload ? sim.overload.toFixed(2) : '–';
   $('sHeal').textContent = sim.lastSub ? nf.format(sim.healed) : '–';
@@ -1322,6 +1368,7 @@ const LEGENDS = {
   mantle: { css: () => grad(CM.mantle, -1, 1), ticks: ['cold', 'mean', 'hot (±2 rms)'] },
   damage: { css: () => grad(CM.damage, 0, 1), ticks: ['0 intact', '0.5', '1 broken'] },
   history: { css: () => `linear-gradient(90deg, rgb(${HIST[1]}) 0 33%, rgb(${HIST[2]}) 33% 66%, rgb(${HIST[3]}) 66%)`, ticks: ['collision', 'rift', 'suture · fades over ~400 Myr'] },
+  lith: { css: () => grad(CM.lith, 0, 250), ticks: ['0 km', '150 ordinary continent', '250 craton'] },
   strength: { css: () => grad(CM.strength, 0, 1), ticks: ['weak', '10^3.5', '10^7 strong'] },
   plates: { css: () => `linear-gradient(90deg, ${Array.from({ length: 8 }, (_, p) => `rgb(${hsl((p * 0.6180339) % 1, 0.5, 0.5).map(Math.round)})`).join(',')})`, ticks: ['one hue per plate', 'lighter = continental'] },
 };
@@ -1340,12 +1387,13 @@ function fmtOutputs() {
   $('resOut').textContent = `f ${f} · ${nf.format(N)} cells · ~${Math.round(spacingKm)} km`;
   $('contOut').textContent = `${Math.round(+$('cont').value * 100)} %`;
   $('platesOut').textContent = $('plates').value;
+  $('cratonOut').textContent = `${Math.round(+$('craton').value * 100)} %`;
   $('radiusOut').textContent = `${nf.format(R)} km`;
   $('dtOut').textContent = `${(+$('dt').value).toFixed(2)} Myr`;
   for (const id of ['slab', 'flow', 'insul', 'coll', 'strength']) { dyn[id] = mult(id); $(id + 'Out').textContent = `×${dyn[id].toFixed(2)}`; }
   dyn.ocean = +$('ocean').value; $('oceanOut').textContent = `${dyn.ocean.toFixed(2)} km mean depth`;
 }
-['res', 'cont', 'plates', 'radius', 'seed'].forEach(id => $(id).addEventListener('input', () => { fmtOutputs(); markPending(); }));
+['res', 'cont', 'craton', 'plates', 'radius', 'seed'].forEach(id => $(id).addEventListener('input', () => { fmtOutputs(); markPending(); }));
 ['slab', 'flow', 'insul', 'coll', 'strength', 'ocean'].forEach(id => $(id).addEventListener('input', () => { fmtOutputs(); dirty = true; }));
 $('dt').addEventListener('input', () => { ui.dt = +$('dt').value; fmtOutputs(); });
 $('reseed').addEventListener('click', () => { $('seed').value = 1 + Math.floor(Math.random() * 99999); resetWorld(); });

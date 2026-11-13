@@ -13,6 +13,7 @@ The deliverable is one self-contained page, `index.html`, published as an artifa
 | 2 | Spherical-harmonic mantle with exact relaxation and subduction/insulation sources, gradient flow, hotspots (§7); torque balance with basal drag, slab pull, implicit contact resistance, 3P×3P direct solve (§8) | done, untuned |
 | 3 | Rifting: strength field, damage growth and healing, candidate lines by Dijkstra, projected line tension, split (§10) | done, see findings 6–10 |
 | 4 | Welding (§9) | done |
+| 4a | Lithosphere: mantle-lithosphere thickness m, cratons as seeded roots, crust foundering, strength from m and h | done, see findings 12–14 |
 | 4b | Escape from the late two-plate state: subduction initiation, or rift seeding for plates with little perimeter | next, see finding 11 |
 | 5 | Topographic body force, ridge push (§8.3, optional); history fields: fold direction, event kind/time, V (§2); export to next stage (§12) | later |
 | 6 | Performance: sparse plate grids, GPU compositing | when the rules settle |
@@ -43,6 +44,25 @@ These are reproducible with the default seed (1), f = 64, Δt = 2 Myr.
 10. **Arcs alone over-grow continents.** With slab pull ×3, continental crust reached 58% and the world locked harder. **Addition:** subduction erosion removes continental crust at the front cell at A_se·v per unit trench length (A_se = A_arc), so Andean-type margins roughly break even. The literature balance between arc addition and subduction erosion is cited from memory and should be checked. In practice it made little difference (about 42% → 44% at 3 Gyr), so the excess growth is mainly elsewhere.
 11. **Open: the late two-plate state.** Seeds 1 and 2 both have a lively first ~800 Myr (30–60 plates, 20–45 km/Myr, continents reassembling), then end at about 2 Gyr as two hemisphere-sized plates moving 1–2 km/Myr with line loads below 1. Mechanism: welding continues until the 50% cap blocks it (a deviation that exists because a near-global plate has no perimeter to seed rifts from). Huge, continent-laden plates have drag proportional to area but slab pull only proportional to trench length (Forsyth & Uyeda), so they are slow, and slow plates carry little tension. The missing process is probably subduction initiation at old passive margins, which is how Earth breaks up large plates without rifting them.
 
+## Lithosphere model (phase 4a)
+
+This replaces the time-since-event "cratonisation" ramp, the age clock in drag coupling, the separate √age seafloor strength, and the subduction erosion I added earlier.
+
+- **State.** Crust thickness h (as before), plus mantle-lithosphere thickness m: carried per record for continents, derived for seafloor as m = min(100, 10 + 9√age) km.
+- **Cratons.** At t = 0 a Poisson number of patches (mean 2, at least 1) covers a chosen share of the initial continents (slider, default 25%) with m up to 250 km, tapering over 300 km to the ordinary continental value m_eq = 150 km. Nothing later creates m above m_eq.
+- **Strength.** S = S₀(type) · (m/100) · exp(−max(h − 35, 0)/15) · (1 − d) · exp(−max(T, 0)/T_w). Thick lids are strong; thick, hot, quartz-rich crust is weak, so orogens are weak belts.
+- **Drag.** Coupling c = C_oc · max(0.3, (m/100)²).
+- **Destruction, never reset.**
+  - A rift line and its margin multiply m by 0.5.
+  - m above m_eq decays toward m_eq with τ = 1000 Myr while an active slab lies beneath (refertilisation, modelled on the North China craton; cited from memory).
+  - Thinned continental lithosphere regrows toward m_eq (τ = 200 Myr) but never beyond it.
+- **Foundering.** Crust below 60 km relaxes away with τ = 30 Myr: a volume sink tied to collisions. The spec's lateral spreading above h_max = 70 km is kept for plateaus.
+- **Collisions.** Mantle lithosphere does not stack; the lower plate's mantle part sinks with its slab.
+
+12. **The spec's pair polarity destroyed cratons within 200 Myr.** In an overlap the lower cell is deleted, with its root, and the pair's polarity is set once by elevation, which cratons share with every continent. A craton that arrived at a trench as the passenger of a subducting plate was deleted cell by cell. Its crust was plastered onto the overriding seafloor, which became continent with oceanic-thickness lithosphere. Measured: 226k of 261k km·cells of root excess lost to overlaps by 160 Myr. **Deviation:** per-cell overrides of pair polarity. If exactly one cell is subductable, it goes down (buoyant crust clogs the trench, as in subduction polarity reversal). If neither is, the thinner lithosphere is consumed and its crust stacks onto the thicker. Pair polarity still governs ocean–ocean overlaps, where flicker would matter.
+13. **Craton loss channels after that fix** (seed 1, to 1600 Myr, refertilisation τ = 300 Myr): refertilisation 117k, rifting 94k, consumption by thicker roots 58k; half-life about 400 Myr. Refertilisation was then slowed to τ = 1000 Myr.
+14. **Rift lines favour thin lithosphere.** 75% of 456 splits (seed 1) ran through lithosphere thinner than the plate mean, at 0.87× the mean on average.
+
 ## Untuned constants
 
-These are ratios only (spec §13), set so early plate speeds fall in 15–100 km/Myr: F_sp = 6e5, K_coll = 2e5 km, K_sub = 2e3 km, U₀ = 40 km/Myr, α = 1, β = 0.02, A_arc = 0.35 km, hotspot birth 0.6 and thickening 0.6 km/Myr. Rifting and welding: S_cont = 7.5e5 (×3 for cratons after 500 Myr), S_oc = 4e6·(1 + √(age/10 Myr)), T_w = 0.5, k_r = 0.005 /Myr, ε = 0.15, K = 12 seeds, f_min = 0.1, v_weld = 5 km/Myr, t_weld = 20 Myr. The live "Dynamics" sliders scale slab pull, mantle flow, insulation (β), collision resistance (K_coll), and lithosphere strength (S_cont and S_oc).
+These are ratios only (spec §13), set so early plate speeds fall in 15–100 km/Myr: F_sp = 6e5, K_coll = 2e5 km, K_sub = 2e3 km, U₀ = 40 km/Myr, α = 1, β = 0.02, A_arc = 0.35 km, hotspot birth 0.6 and thickening 0.6 km/Myr. Rifting and welding: S_cont = 7.5e5 and S_oc = 1.5e7 at m = 100 km (see the lithosphere model), T_w = 0.5, k_r = 0.005 /Myr, ε = 0.15, K = 12 seeds, f_min = 0.1, v_weld = 5 km/Myr, t_weld = 20 Myr. The live "Dynamics" sliders scale slab pull, mantle flow, insulation (β), collision resistance (K_coll), and lithosphere strength (S_cont and S_oc).
