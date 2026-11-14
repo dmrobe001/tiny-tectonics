@@ -86,6 +86,12 @@ This replaces the time-since-event "cratonisation" ramp, the age clock in drag c
 
     Result at 400 Myr: 83 pieces and 56 specks. About half the remaining specks by 800 Myr are crust formed during the run (island arcs, plateaus).
 
+21. **Welding only when a collision has ended removes the late stall.** Old rule (the spec's: mean relative speed below 5 km/Myr for 20 Myr at a continental contact): from about 2 Gyr, 6–15 slow plates, welds outnumbering rifts, continents growing to 45–50%. New rule (`WELD_RULE: 'ended'`): a pair welds only if it stacked continental crust within 100 Myr, its peak contact speed while stacking reached V_coll_min, and it has slowed below min(5 km/Myr, f·peak) for 20 Myr.
+    - With V_coll_min = 10 km/Myr and f = 0.3 it overshot: about 95 plates, rifts:welds about 3:1, continents eroding from 25% to 11% by 3 Gyr, cratons almost gone.
+    - With V_coll_min = 5 km/Myr and f = 0.5 (now the default), both seeds reach a steady regime through 3 Gyr. Seed 1: 64–79 plates, 10–19 km/Myr, continents flat at 23–25%. Seed 2: 67–86 plates, 15–23 km/Myr, continents 18–20%.
+    - Doubling lithosphere strength barely changed the rift count.
+    - Still open: craton area falls from about 4% to 0.5–0.7% of the sphere by 3 Gyr. Plate counts (about 70) are high against Earth's roughly 15 major plates, but most are small. No distinct supercontinent cycle is visible in plate counts sampled every 500 Myr.
+
 ## Untuned constants
 
 These are ratios only (spec §13), set so early plate speeds fall in 15–100 km/Myr: F_sp = 6e5, K_coll = 2e5 km, K_sub = 2e3 km, U₀ = 40 km/Myr, α = 1, β = 0.02, A_arc = 0.35 km, hotspot birth 0.6 and thickening 0.6 km/Myr. Rifting and welding: S_cont = 7.5e5 and S_oc = 1.5e7 at m = 100 km (see the lithosphere model), T_w = 0.5, k_r = 0.005 /Myr, ε = 0.15, K = 12 seeds, f_min = 0.1, v_weld = 5 km/Myr, t_weld = 20 Myr. The live "Dynamics" sliders scale slab pull, mantle flow, insulation (β), collision resistance (K_coll), and lithosphere strength (S_cont and S_oc).
