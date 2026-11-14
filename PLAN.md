@@ -98,6 +98,19 @@ This replaces the time-since-event "cratonisation" ramp, the age clock in drag c
 
     Seeds 1 and 2: R falls from 0.50–0.62 at the start to a mean of 0.12–0.14 after 200 Myr (sd 0.07–0.08, max 0.41), and L stays at a mean of 0.13–0.15 (max 0.42). Plate count is steady at about 70. Clustering episodes (R above mean + 1 sd): 3 and 5, irregular, the last at 1.56 and 3.37 Gyr. The autocorrelation of R peaks at 320 and 420 Myr with r = 0.42 and 0.15: weak quasi-periodicity at best. Baseline: n equal pieces placed at random give an expected R of about 1.2/√n, so with roughly 100 effective pieces the observed R is about what chance alone produces. Craton area falls from about 6.5% to 0.3–0.4%, with losses weakly concentrated in dispersed phases (correlation of craton change with R: −0.31 and −0.18). Hypothesis to test next: the spec's assembly mechanism (continents dragged toward cold downwellings over subduction zones by mantle flow) is too weak against the randomising effect of about 70 independently moving plates.
 
+## Minimal cycle model (`cycle.html`)
+
+A deliberately non-physical toy, built to find the smallest set of ingredients that produces a supercontinent cycle.
+
+- **Continents:** N rigid caps doing overdamped Brownian motion on the sphere, dx = μ(−∇T)dt + √(2D dt) ξ, with overlaps resolved by position projection.
+- **Mantle:** degree 1..L harmonics, T = T_c + T_h, each relaxed exactly. The cold field (memory τ_c = 30 Myr) has source −γ Σ a_cap Y_lm(x_k), standing in for slabs at continental margins. The hot field (memory τ = 300 Myr) has source +β Σ w_k a_cap Y_lm(x_k), insulation weighted by w_k = (s_k/N)^p, with s_k the size of continent k's touching cluster.
+
+What was needed (seeds 1–4, 5 Gyr):
+1. **Insulation alone gives no cycle.** Self-heating only ever repels, so the evenly spread state is stable and the field decays to rms about 0.01.
+2. **Fast cold attraction plus slow hot repulsion** (activator with delayed inhibitor) gives aggregation and oscillation, but with a linear blanket (p = 0) the cluster never fully disperses, and stronger insulation suppresses assembly instead.
+3. **A blanket nonlinearity** (insulation grows with the blanket's width; p = 0.5 is the default) gives robust cycles on all four seeds: 11–14 assemblies in 5 Gyr, mean intervals 200–440 Myr. Assemblies are counted when the largest cluster reaches 90% of the continents after dropping below 70%. With p = 1, one seed locked into two antipodal clusters, a natural fixed point of a degree-2 field.
+4. **Geometry:** successive assemblies form a mean 97° apart for L = 2 (69–119° across seeds) and 115° for L = 1 (80–139°). Degree 2 pulls toward the "orthoversion" 90°, but the contrast is weaker than the clean 90°-versus-180° I predicted.
+
 ## Untuned constants
 
 These are ratios only (spec §13), set so early plate speeds fall in 15–100 km/Myr: F_sp = 6e5, K_coll = 2e5 km, K_sub = 2e3 km, U₀ = 40 km/Myr, α = 1, β = 0.02, A_arc = 0.35 km, hotspot birth 0.6 and thickening 0.6 km/Myr. Rifting and welding: S_cont = 7.5e5 and S_oc = 1.5e7 at m = 100 km (see the lithosphere model), T_w = 0.5, k_r = 0.005 /Myr, ε = 0.15, K = 12 seeds, f_min = 0.1, v_weld = 5 km/Myr, t_weld = 20 Myr. The live "Dynamics" sliders scale slab pull, mantle flow, insulation (β), collision resistance (K_coll), and lithosphere strength (S_cont and S_oc).
