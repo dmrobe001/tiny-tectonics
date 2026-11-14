@@ -446,6 +446,11 @@ const K_ = {
   SPECK_FRAC: 0.001,  // continental rift debris smaller than this fraction of the sphere stays with side A
   OVER_CAP: 5,        // cap on the fractional overload driving damage growth
   V_WELD: 5, T_WELD: 20,
+  WELD_RULE: 'ended',  // 'ended': weld only when a collision has ended; 'slow': the spec's rule (any slow continental contact)
+  T_COLL_ACTIVE: 20,   // stacking within this window counts as an active collision (peak speed is tracked then)
+  T_COLL_MEM: 100,     // a collision must have stacked crust within this window to qualify for welding
+  V_COLL_MIN: 10,      // km/Myr: peak convergence that makes it a real collision
+  WELD_FRAC: 0.3,      // welding needs the contact to slow below this fraction of its peak speed
   INIT_RATE: 2.5e-6,  // passive-margin subduction initiation, per km of margin per Myr at unit age factor
   INIT_AGE: 60, INIT_SCALE: 60, INIT_MIN_FRAC: 0.005, // smallest continental block that can initiate (fraction of sphere) // age factor max(0, (age - INIT_AGE) / INIT_SCALE), age of the margin seafloor in Myr
   WELD_MAX_FRAC: 0.5,  // deviation: no weld may create a plate covering more than this fraction of the sphere
@@ -701,13 +706,24 @@ function createSim(grid, prm, dyn) {
     }
     for (let k = n - 1; k >= 0; k--) { let s = rhs[k]; for (let c = k + 1; c < n; c++) s -= A[k * n + c] * rhs[c]; rhs[k] = A[k * n + k] ? s / A[k * n + k] : 0; }
     for (let p = 0; p < P; p++) plates[p].w = [rhs[3*p], rhs[3*p+1], rhs[3*p+2]];
-    // welding clock: continental contact whose mean relative speed stays below V_WELD
+    // welding clock (see WELD_RULE)
     for (const rec of pairs.values()) rec.cc = false;
     for (const [key, C] of contacts) {
       if (!C[12]) continue;
       const rec = pairs.get(key); if (!rec) continue;
       rec.cc = true;
-      if (C[11] / C[12] < K_.V_WELD) { if (rec.slowSince === undefined) rec.slowSince = time; }
+      const v = C[11] / C[12];
+      let ended;
+      if (K_.WELD_RULE === 'slow') ended = v < K_.V_WELD; // the spec's rule: slow continental contact
+      else {
+        // a collision that has ended: the pair stacked continental crust recently, converged fast at its peak,
+        // and has since slowed both absolutely and relative to that peak
+        const recentColl = rec.collTime !== undefined && time - rec.collTime <= K_.T_COLL_ACTIVE;
+        if (recentColl) rec.peakV = Math.max(rec.peakV || 0, v);
+        ended = rec.collTime !== undefined && time - rec.collTime <= K_.T_COLL_MEM && (rec.peakV || 0) >= K_.V_COLL_MIN
+          && v < Math.min(K_.V_WELD, K_.WELD_FRAC * rec.peakV);
+      }
+      if (ended) { if (rec.slowSince === undefined) rec.slowSince = time; }
       else rec.slowSince = undefined;
     }
     for (const rec of pairs.values()) if (!rec.cc) rec.slowSince = undefined;
@@ -800,6 +816,7 @@ function createSim(grid, prm, dyn) {
         if (subd(sl)) { subCount[i] += 1; events.push(i, q, time - T0[sl]); }
         else { // accretion or collision: conserve volume onto the upper cell
           H[su] += H[sl]; D[su] = Math.min(1, D[su] + K_.D_COLL); TOR[su] = time; KD[su] = 1;
+          if (Ty[su] === 1 && Ty[sl] === 1) { const rc = pairs.get(pkey(p, q)); if (rc) rc.collTime = time; } // continental stacking: a collision
           if (Ty[su] === 0 && H[su] > H_CRIT) { ML[su] = mLith(su, time); Ty[su] = 1; } // m does not stack: the lower plate's mantle part sinks with its slab
         }
         plates[q].idx[hitR[k]] = -2; release(sl); // tombstone: consumed crust must not be healed back
