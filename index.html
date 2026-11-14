@@ -449,8 +449,8 @@ const K_ = {
   WELD_RULE: 'ended',  // 'ended': weld only when a collision has ended; 'slow': the spec's rule (any slow continental contact)
   T_COLL_ACTIVE: 20,   // stacking within this window counts as an active collision (peak speed is tracked then)
   T_COLL_MEM: 100,     // a collision must have stacked crust within this window to qualify for welding
-  V_COLL_MIN: 10,      // km/Myr: peak convergence that makes it a real collision
-  WELD_FRAC: 0.3,      // welding needs the contact to slow below this fraction of its peak speed
+  V_COLL_MIN: 5,       // km/Myr: peak convergence that makes it a real collision
+  WELD_FRAC: 0.5,      // welding needs the contact to slow below this fraction of its peak speed
   INIT_RATE: 2.5e-6,  // passive-margin subduction initiation, per km of margin per Myr at unit age factor
   INIT_AGE: 60, INIT_SCALE: 60, INIT_MIN_FRAC: 0.005, // smallest continental block that can initiate (fraction of sphere) // age factor max(0, (age - INIT_AGE) / INIT_SCALE), age of the margin seafloor in Myr
   WELD_MAX_FRAC: 0.5,  // deviation: no weld may create a plate covering more than this fraction of the sphere
