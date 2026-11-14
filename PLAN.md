@@ -79,6 +79,13 @@ This replaces the time-since-event "cratonisation" ramp, the age clock in drag c
 
 19. **No supercontinent cycle by 3.5 Gyr.** Seeds 1 and 2 stay at 5–11 plates, 1–8 km/Myr from 2 to 3.5 Gyr. Initiation keeps firing (209 and 132 events in total), but welds outpace rifts plus initiations (seed 1: 686 welds against 560 rifts and 209 initiations). Continental crust grows again during the stall (seed 2: 34% → 52%, with land at about 38%), so a thin-continent source remains. Likely structural cause: the weld criterion (mean relative speed below 5 km/Myr for 20 Myr) measures absolute slowness, not the end of a collision. Once a world slows down, every continental contact qualifies, which is self-reinforcing: slow → weld → bigger plates → slower.
 
+20. **Archipelagos were mostly rift and collision debris, not weakness from damage.** Census of connected continental pieces (seed 1, 400 Myr): 163 pieces and 125 specks (<10 cells) at baseline. With damage ignored by strength: 204 and 160. With no rift splits: 25 and 21. Arcs, hotspots, spreading and initiation made no difference. The specks were 75–95% inherited crust, and their most common last event was a rift. Per-split accounting found about 2.4 new specks per split, all bordering the rift line on the departing side. Mechanism: the cheapest rift line stays on land (continent is 20–30× weaker than seafloor) and hugs coastlines, cutting off land strips. Fixes:
+    - continental fragments on side B smaller than 0.1% of the sphere that border the line stay with side A;
+    - stray pockets go to the side they border across the line;
+    - continent–continent consumption uses one polarity per pair, decided at first contact by lithosphere thickness, overridden per cell only by a root more than 50 km thicker. Per-cell decisions had left checkerboard remnants.
+
+    Result at 400 Myr: 83 pieces and 56 specks. About half the remaining specks by 800 Myr are crust formed during the run (island arcs, plateaus).
+
 ## Untuned constants
 
 These are ratios only (spec §13), set so early plate speeds fall in 15–100 km/Myr: F_sp = 6e5, K_coll = 2e5 km, K_sub = 2e3 km, U₀ = 40 km/Myr, α = 1, β = 0.02, A_arc = 0.35 km, hotspot birth 0.6 and thickening 0.6 km/Myr. Rifting and welding: S_cont = 7.5e5 and S_oc = 1.5e7 at m = 100 km (see the lithosphere model), T_w = 0.5, k_r = 0.005 /Myr, ε = 0.15, K = 12 seeds, f_min = 0.1, v_weld = 5 km/Myr, t_weld = 20 Myr. The live "Dynamics" sliders scale slab pull, mantle flow, insulation (β), collision resistance (K_coll), and lithosphere strength (S_cont and S_oc).
