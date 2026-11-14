@@ -70,6 +70,11 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 dl.stats { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; font-size: 12.5px; }
 dl.stats dt { color: var(--ink-dim); }
 dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-variant-numeric: tabular-nums; }
+.spark { display: flex; flex-direction: column; gap: 3px; }
+.spark-head { display: flex; justify-content: space-between; font-size: 12.5px; }
+.spark-head output { font: 12px var(--font-data); color: var(--ink); font-variant-numeric: tabular-nums; }
+.spark canvas { width: 100%; height: 52px; display: block; cursor: crosshair; }
+.spark-axis { display: flex; justify-content: space-between; font: 10.5px var(--font-data); color: var(--ink-dim); }
 .note { font-size: 12px; color: var(--ink-dim); line-height: 1.5; }
 .hint { font-size: 11.5px; color: var(--ink-dim); }
 #err { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--ink-dim); }
@@ -183,6 +188,14 @@ dl.stats dd { margin: 0; text-align: right; font: 12px var(--font-data); font-va
       <label class="check"><input type="checkbox" id="bounds"> Outline plate boundaries</label>
       <label class="check"><input type="checkbox" id="hotspots" checked> Mark hotspots</label>
       <div class="legend" id="legend"><div class="bar" id="legendBar"></div><div class="ticks" id="legendTicks"></div></div>
+    </section>
+
+    <section>
+      <div class="eyebrow">Continental assembly · every 10 Myr</div>
+      <div class="spark" data-key="R" data-max="1" data-fmt="2"><div class="spark-head"><span>Clustering order parameter</span><output></output></div><canvas></canvas><div class="spark-axis"><span>0 Myr</span><span class="spark-end"></span></div></div>
+      <div class="spark" data-key="L" data-max="1" data-fmt="2"><div class="spark-head"><span>Largest landmass share</span><output></output></div><canvas></canvas><div class="spark-axis"><span>0 Myr</span><span class="spark-end"></span></div></div>
+      <div class="spark" data-key="plates" data-max="auto" data-fmt="0"><div class="spark-head"><span>Plates</span><output></output></div><canvas></canvas><div class="spark-axis"><span>0 Myr</span><span class="spark-end"></span></div></div>
+      <p class="hint">Order parameter: 1 = all continental crust in one compact cap, 0 = spread evenly. Landmass share: 1 = one connected supercontinent. Hover a chart to read a past value.</p>
     </section>
 
     <section>
@@ -1183,7 +1196,30 @@ function createSim(grid, prm, dyn) {
   }
 
   sim.strengthAt = i => strength(i, slotW[i], sim.time);
-  let nextCheck = K_.DT_R;
+  let nextCheck = K_.DT_R, nextRecord = 0;
+  // Continental assembly measures, recorded every 10 Myr:
+  //  R: polar order parameter |area-weighted mean position of continental crust| / (1 - f), f = continental fraction.
+  //     1 - f is the maximum, reached when all continental crust forms one spherical cap; 0 = spread evenly.
+  //  L: largest connected continental area / all continental area (connectivity across plates).
+  sim.history = { t: [], R: [], L: [], plates: [], craton: [] };
+  const compLab = new Int32Array(N);
+  sim.assembly = function () {
+    let mx = 0, my = 0, mz = 0, A = 0, Ac = 0;
+    for (let i = 0; i < N; i++) { const s = slotW[i]; if (Ty[s] !== 1) continue; const a = area[i]; mx += a * pos[3*i]; my += a * pos[3*i+1]; mz += a * pos[3*i+2]; A += a;
+      if (ML[s] > K_.M_EQ + 20) Ac += a; }
+    if (!A) return { R: 0, L: 0, craton: 0 };
+    const f = A / (4 * Math.PI), R = Math.min(1, Math.hypot(mx, my, mz) / A / Math.max(1e-6, 1 - f));
+    compLab.fill(-1); let best = 0; const st = [];
+    for (let i0 = 0; i0 < N; i0++) { if (compLab[i0] >= 0 || Ty[slotW[i0]] !== 1) continue;
+      let a = 0; st.push(i0); compLab[i0] = i0;
+      while (st.length) { const i = st.pop(); a += area[i]; for (let k = off[i]; k < off[i + 1]; k++) { const j = nbr[k]; if (compLab[j] < 0 && Ty[slotW[j]] === 1) { compLab[j] = i0; st.push(j); } } }
+      if (a > best) best = a; }
+    return { R, L: best / A, craton: Ac / (4 * Math.PI) };
+  };
+  sim.recordAssembly = function () {
+    const m = sim.assembly(), h = sim.history;
+    h.t.push(Math.round(sim.time)); h.R.push(m.R); h.L.push(m.L); h.craton.push(m.craton); h.plates.push(plates.reduce((n, pl) => n + (pl.cells > 0), 0));
+  };
   function substep(h) {
     const time = sim.time + h;
     updateMantle(h);                 // 1. mantle coefficients (exact exponential update)
@@ -1215,6 +1251,7 @@ function createSim(grid, prm, dyn) {
     sim.healed = 0;
     for (let s = 0; s < sub; s++) substep(dt / sub);
     sim.lastSub = sub;
+    while (sim.time >= nextRecord) { sim.recordAssembly(); nextRecord += 10; }
     return sub;
   };
   // world-frame display fields; sea level from a fixed ocean volume
@@ -1388,6 +1425,42 @@ let grid = null, sim = null, F = null, stepMs = 0, dirty = true, arrowGrid = nul
 function readWorldParams() { return { f: +$('res').value, contFrac: +$('cont').value, cratonFrac: +$('craton').value, plates: +$('plates').value, radius: +$('radius').value, seed: Math.floor(+$('seed').value) || 1 }; }
 let applied = null;
 
+// small single-series line charts of the assembly history; hover shows the value at that time
+const sparkHover = new Map();
+function drawSparks() {
+  if (!sim) return;
+  const h = sim.history, n = h.t.length;
+  for (const el of document.querySelectorAll('.spark')) {
+    const key = el.dataset.key, ys = h[key], cv = el.querySelector('canvas'), ctx = cv.getContext('2d');
+    const dpr = Math.min(window.devicePixelRatio || 1, 2), W = cv.clientWidth, H = cv.clientHeight;
+    if (!W) continue;
+    if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+    const cs = getComputedStyle(document.documentElement);
+    const ymax = el.dataset.max === 'auto' ? Math.max(1, ...ys) * 1.1 : +el.dataset.max, tmax = Math.max(10, n ? h.t[n - 1] : 10);
+    const X = t => 2 + (W - 4) * t / tmax, Y = v => H - 3 - (H - 6) * v / ymax;
+    ctx.strokeStyle = cs.getPropertyValue('--panel-edge'); ctx.lineWidth = 1; // recessive grid at 0, half, max
+    for (const g of [0, 0.5, 1]) { ctx.beginPath(); ctx.moveTo(0, Math.round(Y(g * ymax)) + 0.5); ctx.lineTo(W, Math.round(Y(g * ymax)) + 0.5); ctx.stroke(); }
+    if (n > 1) {
+      ctx.strokeStyle = cs.getPropertyValue('--accent'); ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.beginPath();
+      for (let k = 0; k < n; k++) { const x = X(h.t[k]), y = Y(ys[k]); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+      ctx.stroke();
+    }
+    const hk = sparkHover.get(cv);
+    let k = n - 1;
+    if (hk !== undefined && n) { k = Math.max(0, Math.min(n - 1, Math.round(hk * (n - 1)))); const x = X(h.t[k]);
+      ctx.strokeStyle = cs.getPropertyValue('--ink-dim'); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, H); ctx.stroke();
+      ctx.fillStyle = cs.getPropertyValue('--accent'); ctx.beginPath(); ctx.arc(x, Y(ys[k]), 4, 0, 2 * Math.PI); ctx.fill(); }
+    const fmt = v => (+v).toFixed(+el.dataset.fmt);
+    el.querySelector('output').textContent = n ? (hk !== undefined ? `${fmt(ys[k])} at ${h.t[k]} Myr` : fmt(ys[k])) : '–';
+    el.querySelector('.spark-end').textContent = `${tmax} Myr`;
+  }
+}
+for (const cv of document.querySelectorAll('.spark canvas')) {
+  cv.addEventListener('pointermove', e => { const r = cv.getBoundingClientRect(); sparkHover.set(cv, Math.max(0, Math.min(1, (e.clientX - r.left) / r.width))); drawSparks(); });
+  cv.addEventListener('pointerleave', () => { sparkHover.delete(cv); drawSparks(); });
+}
+
 function resetWorld() {
   const prm = readWorldParams();
   grid = buildGrid(prm.f);
@@ -1494,6 +1567,7 @@ function updateTextures() {
   $('sHeal').textContent = sim.lastSub ? nf.format(sim.healed) : '–';
   $('sSub').textContent = sim.lastSub || '–';
   $('sMs').textContent = stepMs ? `${stepMs.toFixed(0)} ms` : '–';
+  drawSparks();
   const tt = sim.time.toFixed(1); $('clock').textContent = tt; $('hudTime').textContent = tt;
 }
 
