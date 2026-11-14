@@ -92,6 +92,12 @@ This replaces the time-since-event "cratonisation" ramp, the age clock in drag c
     - Doubling lithosphere strength barely changed the rift count.
     - Still open: craton area falls from about 4% to 0.5–0.7% of the sphere by 3 Gyr. Plate counts (about 70) are high against Earth's roughly 15 major plates, but most are small. No distinct supercontinent cycle is visible in plate counts sampled every 500 Myr.
 
+22. **Assembly measures show no supercontinent cycle (to 4 Gyr).** Two measures are recorded every 10 Myr and drawn in the page:
+    - clustering order parameter R = |area-weighted mean position of continental crust| / (1 − f), with f the continental fraction, so that R = 1 is one compact spherical cap;
+    - largest landmass share L, the largest connected continental area over all continental area.
+
+    Seeds 1 and 2: R falls from 0.50–0.62 at the start to a mean of 0.12–0.14 after 200 Myr (sd 0.07–0.08, max 0.41), and L stays at a mean of 0.13–0.15 (max 0.42). Plate count is steady at about 70. Clustering episodes (R above mean + 1 sd): 3 and 5, irregular, the last at 1.56 and 3.37 Gyr. The autocorrelation of R peaks at 320 and 420 Myr with r = 0.42 and 0.15: weak quasi-periodicity at best. Baseline: n equal pieces placed at random give an expected R of about 1.2/√n, so with roughly 100 effective pieces the observed R is about what chance alone produces. Craton area falls from about 6.5% to 0.3–0.4%, with losses weakly concentrated in dispersed phases (correlation of craton change with R: −0.31 and −0.18). Hypothesis to test next: the spec's assembly mechanism (continents dragged toward cold downwellings over subduction zones by mantle flow) is too weak against the randomising effect of about 70 independently moving plates.
+
 ## Untuned constants
 
 These are ratios only (spec §13), set so early plate speeds fall in 15–100 km/Myr: F_sp = 6e5, K_coll = 2e5 km, K_sub = 2e3 km, U₀ = 40 km/Myr, α = 1, β = 0.02, A_arc = 0.35 km, hotspot birth 0.6 and thickening 0.6 km/Myr. Rifting and welding: S_cont = 7.5e5 and S_oc = 1.5e7 at m = 100 km (see the lithosphere model), T_w = 0.5, k_r = 0.005 /Myr, ε = 0.15, K = 12 seeds, f_min = 0.1, v_weld = 5 km/Myr, t_weld = 20 Myr. The live "Dynamics" sliders scale slab pull, mantle flow, insulation (β), collision resistance (K_coll), and lithosphere strength (S_cont and S_oc).
