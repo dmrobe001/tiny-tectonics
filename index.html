@@ -442,6 +442,8 @@ const K_ = {
   K_R: 0.005,         // damage growth rate per unit fractional overload, 1/Myr
   EPS_R: 0.15,        // split when mean strength falls below EPS_R x mean base strength
   RIFT_MIN_CELLS: 60, RIFT_MIN_FRAC: 0.02,
+  M_OVERRIDE: 50,     // km by which a root must exceed the pair's continental polarity to override it per cell
+  SPECK_FRAC: 0.001,  // continental rift debris smaller than this fraction of the sphere stays with side A
   OVER_CAP: 5,        // cap on the fractional overload driving damage growth
   V_WELD: 5, T_WELD: 20,
   INIT_RATE: 2.5e-6,  // passive-margin subduction initiation, per km of margin per Myr at unit age factor
@@ -779,7 +781,16 @@ function createSim(grid, prm, dyn) {
       if (hits === 2 && K_.POLARITY_OVERRIDE) {
         const o = 1 - up, a = subd(hitS[up]), b = subd(hitS[o]);
         if (a && !b) up = o;
-        else if (!a && !b && mLith(hitS[o], time) > mLith(hitS[up], time) + 5) up = o;
+        else if (!a && !b) {
+          // neither subductable: one consistent polarity per pair (decided at first continental contact by lithosphere
+          // thickness), overridden per cell only by a decisively thicker root. Per-cell flips left checkerboard debris.
+          const rec = pairs.get(pkey(hitP[up], hitP[o])), mu = mLith(hitS[up], time), mo = mLith(hitS[o], time);
+          if (rec && rec.contLower === undefined) rec.contLower = mo < mu ? hitP[o] : hitP[up];
+          const lowerP = rec ? rec.contLower : (mo < mu ? hitP[o] : hitP[up]);
+          let upNew = lowerP === hitP[up] ? o : up;
+          if (upNew === up && mo > mu + K_.M_OVERRIDE) upNew = o; else if (upNew === o && mu > mo + K_.M_OVERRIDE) upNew = up;
+          up = upNew;
+        }
       }
       const p = hitP[up], su = hitS[up];
       for (let k = 0; k < hits; k++) {
@@ -1005,7 +1016,37 @@ function createSim(grid, prm, dyn) {
     const np = freePlateSlot(); if (np < 0) return;
     const side = lab; // 1 = A (keeps p, includes the line), 2 = B (new plate)
     for (const i of cellsP) side[i] = 1;
-    for (let v = 0; v < cellsP.length; v++) if (best.comp[v] >= 0 && best.comp[v] !== best.big) side[cellsP[v]] = 2;
+    // Side B is the second-largest piece. Small pockets enclosed where the line meets the jagged plate edge go to
+    // whichever main piece they border across the line (previously all went to B, stranding continental debris).
+    const comp = best.comp, sz = new Map();
+    for (let v = 0; v < cellsP.length; v++) { const c = comp[v]; if (c >= 0 && c !== best.big) sz.set(c, (sz.get(c) || 0) + 1); }
+    let second = -1, sm = -1; for (const [c, nn] of sz) if (nn > sm) { sm = nn; second = c; }
+    const pocketSide = new Map();
+    for (const c of sz.keys()) if (c !== second) pocketSide.set(c, [0, 0]);
+    if (pocketSide.size) for (let v = 0; v < cellsP.length; v++) {
+      const votes = pocketSide.get(comp[v]); if (!votes) continue;
+      const i = cellsP[v];
+      for (let e = off[i]; e < off[i + 1]; e++) { const u = loc[nbr[e]]; if (u < 0 || comp[u] !== -2) continue; // across a line cell
+        const iu = cellsP[u];
+        for (let f = off[iu]; f < off[iu + 1]; f++) { const w = loc[nbr[f]]; if (w < 0) continue; if (comp[w] === best.big) votes[0]++; else if (comp[w] === second) votes[1]++; } }
+    }
+    for (let v = 0; v < cellsP.length; v++) {
+      const c = comp[v]; if (c < 0 || c === best.big) continue;
+      const votes = pocketSide.get(c); if (c === second || (votes && votes[1] > votes[0])) side[cellsP[v]] = 2;
+    }
+    // Debris: the cheapest line hugs coastlines (continent is far weaker than seafloor), so it cuts the strip of land
+    // between itself and the sea into specks. Continental fragments on side B smaller than SPECK_FRAC of the sphere
+    // that border the line stay with side A, whose line cells they touch.
+    { const onLine = new Set(best.path.map(v => cellsP[v])), seen = new Set(), maxSpeck = Math.max(3, K_.SPECK_FRAC * N);
+      const isC = i => Ty[slotW[i]] === 1;
+      for (const i0 of cellsP) {
+        if (side[i0] !== 2 || !isC(i0) || seen.has(i0)) continue;
+        const st = [i0], cells = []; seen.add(i0); let touches = false;
+        while (st.length) { const i = st.pop(); cells.push(i);
+          for (let e = off[i]; e < off[i + 1]; e++) { const j = nbr[e]; if (onLine.has(j)) touches = true;
+            if (!seen.has(j) && owner[j] === p && side[j] === 2 && isC(j)) { seen.add(j); st.push(j); } } }
+        if (touches && cells.length < maxSpeck) for (const i of cells) side[i] = 1;
+      } }
     // rifted margin: the line and its B-side neighbours
     let mLine = 0, mPlate = 0; for (const v of best.path) mLine += mLith(slotW[cellsP[v]], time); for (const i of cellsP) mPlate += mLith(slotW[i], time);
     const margin = new Set();
